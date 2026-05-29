@@ -6,7 +6,7 @@ This repository centers on automating updates to the tire financial benchmark wo
 
 ## Files
 
-- `Бенч финансовой отчетности_мэйджоры.xlsx` is the source workbook. Do not overwrite it unless the user explicitly asks.
+- `Бенч финансовой отчетности_мэйджоры.xlsx` is the source workbook. In the public repo it should contain only the `Свод` sheet; company-detail sheets are not part of the default workflow. Do not overwrite it unless the user explicitly asks.
 - `scripts/` contains repeatable automation proofs and ETL scripts.
 - `outputs/` contains generated dry-run artifacts and copied workbooks.
 - `.Codex/skills/taste-skill/` contains a project-local copy of `Leonxlnx/taste-skill` from `skills/taste-skill`.

@@ -152,8 +152,35 @@ def pick_latest_fact(
     )
 
 
+def normalize_label(value: Any) -> str:
+    return " ".join(str(value or "").replace("\xa0", " ").strip().lower().split())
+
+
+def find_summary_value(ws, label: str, company: str = "goodyear") -> Any:
+    company_col = None
+    for row in (1, 31):
+        for col in range(1, ws.max_column + 1):
+            if normalize_label(company) in normalize_label(ws.cell(row, col).value):
+                company_col = col
+                break
+        if company_col:
+            break
+    if not company_col:
+        return None
+
+    target = normalize_label(label)
+    for row in range(1, ws.max_row + 1):
+        for label_col in (2, 3):
+            if normalize_label(ws.cell(row, label_col).value) == target:
+                return ws.cell(row, company_col).value
+    return None
+
+
 def find_current_value(ws, label: str, preferred_year: int = 2025) -> Any:
-    """Find a metric in the existing Goodyear sheet and return the value for year."""
+    """Find a metric in the source workbook and return its current value."""
+    if ws.title == "Свод":
+        return find_summary_value(ws, label)
+
     for row in ws.iter_rows():
         for cell in row:
             if cell.value == label:
@@ -173,7 +200,7 @@ def find_current_value(ws, label: str, preferred_year: int = 2025) -> Any:
 
 def build_rows(company_facts: dict[str, Any], workbook_path: Path) -> list[ExtractedFact]:
     wb = load_workbook(workbook_path, data_only=True, read_only=True)
-    ws = wb["GoodYear"]
+    ws = wb["GoodYear"] if "GoodYear" in wb.sheetnames else wb["Свод"]
 
     rows: list[ExtractedFact] = []
     for metric, config in METRIC_MAP.items():

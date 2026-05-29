@@ -2,9 +2,9 @@
 
 Date: 2026-05-25
 
-## Current Workbook Sources
+## Original Workbook Source Audit
 
-The source links embedded in `Бенч финансовой отчетности_мэйджоры.xlsx` are mostly aggregator/portal links, not official filings.
+This audit was run against the original multi-sheet workbook before the public repo was slimmed down. The public default workbook now keeps only the `Свод` sheet, because the dashboard and Excel importer do not need company-detail sheets. The old embedded source links were mostly aggregator/portal links, not official filings.
 
 | Host | Cells | Unique URLs | Verdict |
 | --- | ---: | ---: | --- |
@@ -35,7 +35,7 @@ The source links embedded in `Бенч финансовой отчетност
 
 ## Practical Conclusion
 
-Do not build the automation on the existing workbook links as-is. They are useful clues for metric names and historical values, but the source registry should replace most of them with official sources and structured APIs. Gemini/DeepSeek/Qwen should consume downloaded official artifacts and return strict JSON; they should not browse Investing.com/MarketScreener as the primary data source.
+Do not build the automation on the old workbook links as-is. They were useful clues for metric names and historical values, but the source registry should replace most of them with official sources and structured APIs. Gemini/DeepSeek/Qwen should consume downloaded official artifacts and return strict JSON; they should not browse Investing.com/MarketScreener as the primary data source.
 
 ## Latest-Period Selector Feasibility
 
