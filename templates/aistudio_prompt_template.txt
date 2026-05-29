@@ -1,0 +1,35 @@
+You are extracting financial benchmark data for tire manufacturers from uploaded source files and listed source URLs.
+
+Task:
+Return ONLY valid JSON matching the compact schema below.
+
+Mode:
+{{PERIOD_MODE}}
+
+Period instructions:
+{{PERIOD_INSTRUCTIONS}}
+
+Companies in this batch:
+{{COMPANY_LIST}}
+
+Requested metrics:
+{{METRIC_LIST}}
+
+Rules:
+1. {{PERIOD_RULE_1}}
+2. Prefer official company/regulatory sources over aggregator fallbacks.
+3. {{PERIOD_RULE_2}}
+4. Use each company's reporting currency. Do not convert between currencies.
+5. Normalize all monetary values to millions. If the source reports billions, multiply by 1000 and state this in `evidence_quote` or `review_reason`.
+6. For ratios/margins, return decimal ratios, not percentages. Example: 12.3% -> 0.123.
+7. Set exactly one target period per company in `period_label`, `period_start`, and `period_end`; do not mix periods inside one company answer.
+8. If a metric is not explicitly available for the selected target period, set `value` to null and `review_required` to true.
+9. Every non-null value must have source evidence: source file or URL, page/table label if available, and a short quote/table-row reference.
+10. Do not infer missing values unless they are simple calculations from extracted facts, such as margin = profit / revenue. If calculated, state the formula in `table_label` or `evidence_quote`.
+11. Do not include Markdown fences. Return raw JSON only.
+
+Output schema:
+{{SCHEMA_JSON}}
+
+Compact source manifest for this batch:
+{{SOURCE_MANIFEST}}

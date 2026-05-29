@@ -1,0 +1,32 @@
+{
+  "reporting_scope": "latest quarter financial benchmark for tire manufacturers",
+  "currency_rule": "Use the reporting currency stated for each company. Do not convert currencies.",
+  "unit_rule": "Use millions unless the source explicitly reports billions; if the source reports billions, convert to millions and note the conversion.",
+  "companies": [
+    {
+      "company_key": "string",
+      "company_name": "string",
+      "period_label": "string, for example Q2 2026, FY 2026, or H1 2026",
+      "period_start": "YYYY-MM-DD or null",
+      "period_end": "YYYY-MM-DD or null",
+      "currency": "string",
+      "unit": "millions",
+      "facts": [
+        {
+          "metric": "one of the requested metric names",
+          "value": "number or null",
+          "source_file": "uploaded file name or null",
+          "source_url": "source URL or null",
+          "source_type": "official_api | official_pdf | official_excel | official_ir_page | official_regulatory_portal | readable_aggregator_fallback | unknown",
+          "page": "page number or null",
+          "table_label": "table or section label or null",
+          "evidence_quote": "short quote or table row text proving the value; null if unavailable",
+          "confidence": "high | medium | low",
+          "review_required": true,
+          "review_reason": "short reason if review_required is true"
+        }
+      ],
+      "company_review_notes": ["string"]
+    }
+  ]
+}

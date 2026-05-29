@@ -1,0 +1,419 @@
+{
+  "batches": [
+    {
+      "batch_id": "batch_01_eu",
+      "title": "Europe",
+      "companies": [
+        "michelin",
+        "continental",
+        "pirelli",
+        "nokian"
+      ]
+    },
+    {
+      "batch_id": "batch_02_us_japan_india",
+      "title": "US, Japan, India",
+      "companies": [
+        "goodyear",
+        "bridgestone",
+        "yokohama",
+        "sumitomo",
+        "toyo",
+        "apollo"
+      ]
+    },
+    {
+      "batch_id": "batch_03_korea_china",
+      "title": "Korea and China",
+      "companies": [
+        "hankook",
+        "nexen",
+        "kumho",
+        "zhongce",
+        "sailun",
+        "linglong"
+      ]
+    }
+  ],
+  "companies": [
+    {
+      "key": "michelin",
+      "display_name": "Michelin",
+      "country": "France",
+      "currency": "EUR",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.michelin.com/en/investor/presentation-events/results-sales",
+          "note": "Official source page; use the latest available materials for the selected dashboard mode."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/epa/ML/financials/?p=quarterly",
+          "note": "Readable fallback; may expose H1/H2 rather than Q1/Q2."
+        }
+      ]
+    },
+    {
+      "key": "continental",
+      "display_name": "Continental AG",
+      "country": "Germany",
+      "currency": "EUR",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.continental.com/en/investors/ir-news/ir-press-releases/?tx_solr%5Bsort%5D=date+desc",
+          "note": "Official source page; use the latest available materials for the selected dashboard mode."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/etr/CON/financials/?p=quarterly",
+          "note": "Readable fallback; use the latest available period for the selected dashboard mode."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/etr/CON/financials/balance-sheet/?p=quarterly",
+          "note": "Readable fallback balance sheet."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/etr/CON/financials/cash-flow-statement/?p=quarterly",
+          "note": "Readable fallback cash flow statement."
+        }
+      ]
+    },
+    {
+      "key": "pirelli",
+      "display_name": "Pirelli",
+      "country": "Italy",
+      "currency": "EUR",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_pdf",
+          "url": "https://corp-assets.pirelli.com/corporate/Pirelli_1Q_2026_Results_Presentation.pdf",
+          "note": "Official Pirelli 1Q 2026 results presentation."
+        },
+        {
+          "type": "official_press_release",
+          "url": "https://press.pirelli.com/pirelli-board-approves-consolidated-results-to-31-march-2026/",
+          "note": "Specific official quarterly document retained for audit/history; future latest-period packages skip fixed-quarter documents unless the registry is refreshed."
+        },
+        {
+          "type": "official_ir_page",
+          "url": "https://corporate.pirelli.com/corporate/en-ww/investors/financial-publications/results-presentations-and-webcasts",
+          "note": "Official results presentations and webcasts page."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/bit/PIRC/financials/?p=quarterly",
+          "note": "Readable fallback."
+        }
+      ]
+    },
+    {
+      "key": "nokian",
+      "display_name": "Nokian Tyres",
+      "country": "Finland",
+      "currency": "EUR",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://company.nokiantyres.com/investors/reports-and-presentations/",
+          "note": "Official reports and presentations page."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/hel/TYRES/financials/?p=quarterly",
+          "note": "Readable fallback; use the latest available period for the selected dashboard mode."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/hel/TYRES/financials/balance-sheet/?p=quarterly",
+          "note": "Readable fallback balance sheet."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/hel/TYRES/financials/cash-flow-statement/?p=quarterly",
+          "note": "Readable fallback cash flow statement."
+        }
+      ]
+    },
+    {
+      "key": "goodyear",
+      "display_name": "Goodyear",
+      "country": "United States",
+      "currency": "USD",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_api",
+          "url": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000042582.json",
+          "note": "SEC Company Facts JSON. Preferred structured source."
+        },
+        {
+          "type": "official_sec_filing",
+          "url": "https://www.sec.gov/Archives/edgar/data/42582/000162828026031866/0001628280-26-031866-index.html",
+          "note": "Specific official quarterly document retained for audit/history; future latest-period packages skip fixed-quarter documents unless the registry is refreshed."
+        }
+      ]
+    },
+    {
+      "key": "bridgestone",
+      "display_name": "Bridgestone",
+      "country": "Japan",
+      "currency": "JPY",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.bridgestone.com/ir/library/result/",
+          "note": "Official source page; use the latest available materials for the selected dashboard mode."
+        },
+        {
+          "type": "official_excel",
+          "url": "https://www.bridgestone.com/ir/library/result/pdf/5108_IR_FinancialData_en.xlsx",
+          "note": "Official Financial and Sales Data Excel; contains quarterly financial data."
+        },
+        {
+          "type": "official_pdf",
+          "url": "https://www.bridgestone.com/ir/library/result/pdf/e_r8_1_results.pdf",
+          "note": "Specific official quarterly document retained for audit/history; future latest-period packages skip fixed-quarter documents unless the registry is refreshed."
+        }
+      ]
+    },
+    {
+      "key": "yokohama",
+      "display_name": "Yokohama",
+      "country": "Japan",
+      "currency": "JPY",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.y-yokohama.com/global/ir/library/results/",
+          "note": "Official source page; use the latest available materials for the selected dashboard mode."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/tyo/5101/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    },
+    {
+      "key": "sumitomo",
+      "display_name": "Sumitomo",
+      "country": "Japan",
+      "currency": "JPY",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.srigroup.co.jp/english/ir/library/financial-report/",
+          "note": "Official Sumitomo Rubber financial report page."
+        },
+        {
+          "type": "official_pdf",
+          "url": "https://www.srigroup.co.jp/english/ir/library/financial-report/dvql4p000010lxcl-att/2026_1q_financial_results.pdf",
+          "note": "Specific official quarterly document retained for audit/history; future latest-period packages skip fixed-quarter documents unless the registry is refreshed."
+        },
+        {
+          "type": "official_pdf",
+          "url": "https://www.srigroup.co.jp/english/ir/library/financial-report/dvql4p000010lxcl-att/2026_1q_financial_report.pdf",
+          "note": "Specific official quarterly document retained for audit/history; future latest-period packages skip fixed-quarter documents unless the registry is refreshed."
+        }
+      ]
+    },
+    {
+      "key": "toyo",
+      "display_name": "Toyo",
+      "country": "Japan",
+      "currency": "JPY",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.toyotires-global.com/ir/library/release/",
+          "note": "Official Toyo Tires financial statements page."
+        },
+        {
+          "type": "official_financial_page",
+          "url": "https://www.toyotires-global.com/ir/financial/",
+          "note": "Official financial data page."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/tyo/5105/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    },
+    {
+      "key": "apollo",
+      "display_name": "Apollo Tyres",
+      "country": "India",
+      "currency": "INR",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://corporate.apollotyres.com/investors/",
+          "note": "Official Apollo Tyres investor financial reporting page."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/nse/APOLLOTYRE/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    },
+    {
+      "key": "hankook",
+      "display_name": "Hankook",
+      "country": "Korea",
+      "currency": "KRW",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.hankooktire.com/global/en/investors/financial-information-results/financial-results.html",
+          "note": "Official Hankook financial results page."
+        },
+        {
+          "type": "official_regulatory_api",
+          "url": "https://engopendart.fss.or.kr/intro/main.do",
+          "note": "OpenDART is the preferred structured Korean disclosure source, but it requires an API key."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/krx/161390/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    },
+    {
+      "key": "nexen",
+      "display_name": "Nexen",
+      "country": "Korea",
+      "currency": "KRW",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.nexentire.com/web/invest/invest_info/list.do",
+          "note": "Official Nexen Tire investor information page."
+        },
+        {
+          "type": "official_regulatory_api",
+          "url": "https://engopendart.fss.or.kr/intro/main.do",
+          "note": "OpenDART is the preferred structured Korean disclosure source, but it requires an API key."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/krx/002350/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    },
+    {
+      "key": "kumho",
+      "display_name": "Kumho",
+      "country": "Korea",
+      "currency": "KRW",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_ir_page",
+          "url": "https://www.kumhotire.com/en/company/investment/financial/index.do",
+          "note": "Official Kumho Tire financial/investor page."
+        },
+        {
+          "type": "official_regulatory_api",
+          "url": "https://engopendart.fss.or.kr/intro/main.do",
+          "note": "OpenDART is the preferred structured Korean disclosure source, but it requires an API key."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/krx/073240/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    },
+    {
+      "key": "zhongce",
+      "display_name": "Zhongce Rubber Group",
+      "country": "China",
+      "currency": "CNY",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_company_site",
+          "url": "https://www.zc-rubber.com/",
+          "note": "Official company site. Use investor/disclosure materials if linked."
+        },
+        {
+          "type": "official_regulatory_portal",
+          "url": "https://www.cninfo.com.cn/",
+          "note": "CNINFO is the preferred Chinese disclosure portal."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/sha/603049/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    },
+    {
+      "key": "sailun",
+      "display_name": "Sailun",
+      "country": "China",
+      "currency": "CNY",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_company_site",
+          "url": "https://www.sailuntire.com/",
+          "note": "Official company site. Use investor/disclosure materials if linked."
+        },
+        {
+          "type": "official_regulatory_portal",
+          "url": "https://www.cninfo.com.cn/",
+          "note": "CNINFO is the preferred Chinese disclosure portal."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/sha/601058/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    },
+    {
+      "key": "linglong",
+      "display_name": "Linglong",
+      "country": "China",
+      "currency": "CNY",
+      "preferred_period": "latest reported period for selected mode",
+      "sources": [
+        {
+          "type": "official_company_site",
+          "url": "https://www.linglongtire.com/",
+          "note": "Official company site. Use investor/disclosure materials if linked."
+        },
+        {
+          "type": "official_regulatory_portal",
+          "url": "https://www.cninfo.com.cn/",
+          "note": "CNINFO is the preferred Chinese disclosure portal."
+        },
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/sha/601966/financials/?p=quarterly",
+          "note": "Readable fallback, may rate-limit."
+        }
+      ]
+    }
+  ]
+}

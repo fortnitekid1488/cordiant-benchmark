@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cordiant Benchmark Console</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/dashboard.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand-lockup" aria-label="Cordiant financial benchmark">
+          <div class="brand-mark">CF</div>
+          <div>
+            <p class="eyebrow">Cordiant</p>
+            <h1>Финансовый бенч</h1>
+          </div>
+        </div>
+
+        <div class="mode-toggle" role="tablist" aria-label="Режим обновления">
+          <button id="mode-quarterly" class="active" type="button" data-mode="quarterly" role="tab" aria-selected="true">Квартал</button>
+          <button id="mode-annual" type="button" data-mode="annual" role="tab" aria-selected="false">Год</button>
+        </div>
+
+        <div class="header-actions">
+          <button id="refresh-btn" class="button ghost" type="button">Обновить</button>
+          <button id="apply-btn" class="button primary" type="button">Собрать Excel</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="status-grid" aria-label="Статус запуска">
+          <div class="status-tile">
+            <span class="tile-label">Пакет</span>
+            <strong id="package-state">...</strong>
+            <small id="package-detail">источники</small>
+          </div>
+          <div class="status-tile">
+            <span class="tile-label">JSON</span>
+            <strong id="json-state">...</strong>
+            <small id="json-detail">ответы модели</small>
+          </div>
+          <div class="status-tile">
+            <span class="tile-label">Финал</span>
+            <strong id="excel-state">...</strong>
+            <small id="excel-detail">итоговый лист</small>
+          </div>
+          <div class="status-tile accent">
+            <span class="tile-label">Провайдер</span>
+            <strong id="provider-name">Qwen</strong>
+            <small id="current-mode-label">Квартал</small>
+          </div>
+        </section>
+
+        <div class="progress-strip" aria-hidden="true">
+          <span id="progress-fill"></span>
+        </div>
+
+        <section class="run-board" aria-label="Этапы">
+          <div class="stage-card" data-stage="sources">
+            <span>01</span>
+            <strong>Источники</strong>
+            <small id="step-sources">...</small>
+          </div>
+          <div class="stage-card" data-stage="provider">
+            <span>02</span>
+            <strong id="provider-step-label">Qwen</strong>
+            <small>файлы и промпт</small>
+          </div>
+          <div class="stage-card" data-stage="json">
+            <span>03</span>
+            <strong>JSON</strong>
+            <small id="step-json">...</small>
+          </div>
+          <div class="stage-card" data-stage="excel">
+            <span>04</span>
+            <strong>Excel</strong>
+            <small id="step-excel">готов к сборке</small>
+          </div>
+        </section>
+
+        <div class="content-grid">
+          <section class="panel command-panel" aria-label="Управление запуском">
+            <div class="panel-head compact">
+              <div>
+                <p class="eyebrow">Запуск</p>
+                <h2 id="screen-title">Квартальное обновление</h2>
+              </div>
+            </div>
+            <p id="screen-subtitle" class="panel-copy">Подготовь источники, обработай батчи в выбранном LLM-сервисе и собери один итоговый лист Excel.</p>
+
+            <label class="field" for="provider-select">
+              <span>Провайдер</span>
+              <select id="provider-select">
+                <option value="qwen">Qwen Studio</option>
+                <option value="gemini">Google AI Studio</option>
+                <option value="kimi">Kimi</option>
+                <option value="mimo">Xiaomi MiMo</option>
+                <option value="deepseek">DeepSeek</option>
+              </select>
+            </label>
+
+            <div class="action-stack">
+              <button id="prepare-btn" class="button primary wide" type="button">Подготовить источники</button>
+              <button id="reveal-package-btn" class="button secondary wide" type="button">Показать пакет</button>
+              <a id="open-provider-sidebar" class="button secondary wide link-button" href="https://chat.qwen.ai/" target="_blank" rel="noreferrer">Открыть Qwen</a>
+            </div>
+
+            <div class="next-step" aria-label="Следующее действие">
+              <p class="eyebrow">Дальше</p>
+              <p id="workflow-note">Нажми «Подготовить источники». После этого первый батч откроется здесь автоматически.</p>
+            </div>
+
+            <ol class="handoff-list">
+              <li>Открой выбранный сервис и отключи web search / grounding.</li>
+              <li>Запусти батч, загрузи файлы, вставь скопированный промпт.</li>
+              <li>Сохрани ответ, повтори для всех батчей и собери Excel.</li>
+            </ol>
+          </section>
+
+          <section class="batch-column" aria-label="Батчи">
+            <div class="panel batch-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Очередь</p>
+                  <h2>Батчи</h2>
+                </div>
+                <span id="batch-count" class="count-pill">0</span>
+              </div>
+              <div id="batch-list" class="batch-list"></div>
+            </div>
+          </section>
+
+          <section class="panel workbench-panel" aria-label="Работа с батчем">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Текущий батч</p>
+                <h2 id="batch-title">Выбери батч</h2>
+                <p id="batch-meta" class="muted-line"></p>
+              </div>
+              <div class="inline-actions">
+                <button id="start-batch-btn" class="button primary small" type="button" disabled>Начать батч</button>
+                <span id="batch-status" class="status-pill neutral">нет JSON</span>
+              </div>
+            </div>
+
+            <div class="workbench-grid">
+              <section class="prompt-panel" aria-label="Промпт">
+                <div class="section-head">
+                  <h3>Промпт</h3>
+                  <a id="open-provider-prompt" class="button secondary small link-button" href="https://chat.qwen.ai/" target="_blank" rel="noreferrer">Открыть сайт</a>
+                </div>
+                <textarea id="prompt-box" readonly spellcheck="false"></textarea>
+              </section>
+
+              <section class="answer-panel" aria-label="Ответ модели">
+                <div class="section-head">
+                  <h3 id="json-section-title">Ответ Qwen</h3>
+                  <button id="save-json-btn" class="button primary small" type="button">Сохранить и дальше</button>
+                </div>
+                <textarea id="json-box" spellcheck="false" placeholder="Вставь сюда полный ответ Qwen"></textarea>
+                <p id="json-feedback" class="inline-status" role="status"></p>
+              </section>
+            </div>
+          </section>
+
+          <aside class="side-column" aria-label="Результат">
+            <section class="panel output-panel">
+              <div class="panel-head compact">
+                <div>
+                  <p class="eyebrow">Результат</p>
+                  <h2>Последний Excel</h2>
+                </div>
+              </div>
+              <p id="output-text" class="output-path">Excel ещё не собирался из этой панели.</p>
+              <button id="reveal-output-btn" class="button secondary wide" type="button" disabled>Показать файл</button>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/dashboard.js"></script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+.DS_Store
+__pycache__/
+.pytest_cache/
+.playwright-cli/
+.playwright-mcp/
+.venv/
+
+.env
+.env.*
+!.env.example
+
+outputs/
+OPEN_THIS_*_PACKAGE
+OPEN_THIS_*_PACKAGE.txt
+
+*.log
+
+# Generated/local spreadsheet artifacts. The source benchmark workbook is project data
+# and should stay committed by default.
+*.xlsx
+*.xlsm
+*.xls
+!Бенч*.xlsx
+~$*
+cordiant-before-redesign-*.png
+
+# Internal Codex working material, not product documentation.
+.Codex/
