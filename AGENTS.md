@@ -6,7 +6,7 @@ This repository centers on automating updates to the tire financial benchmark wo
 
 ## Files
 
-- `Бенч финансовой отчетности_мэйджоры.xlsx` is the source workbook. In the public repo it should contain only the `Свод` sheet; company-detail sheets are not part of the default workflow. Do not overwrite it unless the user explicitly asks.
+- `Бенч финансовой отчетности_мэйджоры.xlsx` is the clean source template. In the public repo it should contain only the `Свод` sheet with structure/formatting/header metadata, not pre-filled benchmark values; company-detail sheets are not part of the default workflow. Do not overwrite it unless the user explicitly asks.
 - `scripts/` contains repeatable automation proofs and ETL scripts.
 - `outputs/` contains generated dry-run artifacts and copied workbooks.
 - `.Codex/skills/taste-skill/` contains a project-local copy of `Leonxlnx/taste-skill` from `skills/taste-skill`.
@@ -73,7 +73,7 @@ update_annual_excel_from_aistudio.cmd
 
 For user-facing demos, prefer `start_dashboard.command` on macOS and `start_dashboard.cmd` on Windows; both open the same local dashboard without requiring terminal commands. Windows symlinks for `OPEN_THIS_*` are best-effort only, so rely on `outputs/latest_aistudio_*_package_path.txt` or the dashboard status when checking the current package.
 
-The public GitHub setup keeps generated outputs, local caches, internal Codex notes, and generated workbook files ignored. The source workbook `Бенч финансовой отчетности_мэйджоры.xlsx` is project data and is expected to be committed by default. Do not stage `outputs/`, `.venv/`, `.playwright-*`, `.Codex/`, or other spreadsheet files unless the user explicitly clears that exact artifact for publication.
+The public GitHub setup keeps generated outputs, local caches, internal Codex notes, and generated workbook files ignored. The clean source template `Бенч финансовой отчетности_мэйджоры.xlsx` is expected to be committed by default, while filled/generated benchmark workbooks are not. Do not stage `outputs/`, `.venv/`, `.playwright-*`, `.Codex/`, or other spreadsheet files unless the user explicitly clears that exact artifact for publication.
 
 ## Verification
 

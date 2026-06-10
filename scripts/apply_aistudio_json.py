@@ -27,6 +27,13 @@ OUTPUT_MAX_ROW = 59
 OUTPUT_MAX_COL = 31
 MIN_VISIBLE_COMPANY_COL_WIDTH = 11.5
 EXCEL_ERROR_CODES = {"#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!"}
+DEFAULT_LC_USD_RATES = {
+    "eu": 1.1306,
+    "us": 1.0,
+    "jp": 149.65,
+    "kr": 1421.6,
+    "cn": 7.1889,
+}
 QUARTER_PERIOD_RE = re.compile(
     r"\b(q[1-4]|[1-4]q)\b|first\s+quarter|second\s+quarter|third\s+quarter|fourth\s+quarter|"
     r"\bquarterly\b|three\s+months|3\s+months",
@@ -256,6 +263,17 @@ def cell_number(ws, row: int, col: int) -> float | None:
     return float(value) if is_number(value) else None
 
 
+def exchange_rate_for_column(ws, col: int) -> float | None:
+    rate = cell_number(ws, 33, col)
+    if rate is not None and rate != 0:
+        return rate
+    country = normalize_label(ws.cell(32, col).value)
+    rate = DEFAULT_LC_USD_RATES.get(country)
+    if rate is not None:
+        ws.cell(33, col).value = rate
+    return rate
+
+
 def set_if_number(ws, row: int, col: int, value: float | None, fallback: Any = None) -> None:
     ws.cell(row, col).value = value if value is not None else fallback
 
@@ -346,10 +364,11 @@ def converted_to_usd(ws, row: int, col: int) -> float | None:
     local_value = cell_number(ws, row, col)
     if local_value is None:
         return None
-    rate = cell_number(ws, 33, col)
     country = normalize_label(ws.cell(32, col).value)
     if country == "us":
+        exchange_rate_for_column(ws, col)
         return local_value
+    rate = exchange_rate_for_column(ws, col)
     if rate is None or rate == 0:
         return None
     if country == "eu":
