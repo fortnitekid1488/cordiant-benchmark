@@ -586,6 +586,13 @@ select {
   gap: 10px;
 }
 
+.section-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -749,8 +756,13 @@ select:focus {
   }
 
   .inline-actions,
+  .section-actions,
   .section-head .button,
   .header-actions > * {
+    width: 100%;
+  }
+
+  .section-actions > * {
     width: 100%;
   }
 

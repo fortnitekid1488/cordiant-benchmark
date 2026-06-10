@@ -92,6 +92,7 @@ const el = {
   batchStatus: must("#batch-status"),
   promptBox: must("#prompt-box"),
   startBatchBtn: must("#start-batch-btn"),
+  copyPromptBtn: must("#copy-prompt-btn"),
   jsonBox: must("#json-box"),
   jsonSectionTitle: must("#json-section-title"),
   saveJsonBtn: must("#save-json-btn"),
@@ -386,6 +387,7 @@ function renderBatchDetail() {
     el.promptBox.value = "";
     el.jsonBox.value = "";
     el.startBatchBtn.disabled = true;
+    el.copyPromptBtn.disabled = true;
     return;
   }
 
@@ -405,6 +407,7 @@ function renderBatchDetail() {
   }
   el.batchStatus.className = `status-pill ${batch.provider_limit_exceeded ? "warning" : batch.json_saved ? "ok" : "neutral"}`;
   el.startBatchBtn.disabled = !state.selectedBatchData.upload_folder_path || !state.selectedBatchData.prompt;
+  el.copyPromptBtn.disabled = !state.selectedBatchData.prompt;
 }
 
 async function refreshStatus({ autoSelect = true } = {}) {
@@ -564,6 +567,25 @@ async function startBatch() {
   }
 }
 
+async function copyPrompt() {
+  if (!state.selectedBatchData) {
+    showToast("Сначала выбери батч");
+    return;
+  }
+  setBusy(el.copyPromptBtn, true, "Копирую...");
+  try {
+    const payload = await api("/api/copy-prompt", {
+      method: "POST",
+      body: JSON.stringify({ mode: state.mode, provider: state.provider, batch: state.selectedBatch }),
+    });
+    showToast(`Промпт скопирован (${payload.prompt_chars || 0} знаков).`);
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    setBusy(el.copyPromptBtn, false);
+  }
+}
+
 function shortPath(path) {
   if (!path) return "";
   const parts = String(path).split("/");
@@ -588,6 +610,7 @@ el.prepareBtn.addEventListener("click", prepareSources);
 el.applyBtn.addEventListener("click", applyExcel);
 el.revealPackageBtn.addEventListener("click", () => reveal(modeInfo().package_path));
 el.startBatchBtn.addEventListener("click", startBatch);
+el.copyPromptBtn.addEventListener("click", copyPrompt);
 el.revealOutputBtn.addEventListener("click", () => reveal(state.lastOutputPath));
 el.saveJsonBtn.addEventListener("click", saveJson);
 

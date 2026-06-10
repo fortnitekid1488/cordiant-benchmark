@@ -811,6 +811,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     }
                 )
 
+            if parsed.path == "/api/copy-prompt":
+                mode = payload.get("mode", "quarterly")
+                provider = normalize_provider(payload.get("provider", "qwen"))
+                batch_id = payload.get("batch")
+                if mode not in MODE_CONFIG or not batch_id:
+                    raise ValueError("Mode and batch are required.")
+                batch_dir = get_batch_dir(mode, batch_id, provider)
+                prompt = (batch_dir / "prompt_for_aistudio.txt").read_text(encoding="utf-8")
+                copy_text_to_clipboard(prompt)
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "batch": batch_summary(mode, batch_dir, provider),
+                        "prompt_chars": len(prompt),
+                    }
+                )
+
             if parsed.path == "/api/apply":
                 mode = payload.get("mode", "quarterly")
                 provider = normalize_provider(payload.get("provider", "qwen"))

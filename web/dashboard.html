@@ -150,7 +150,10 @@
               <section class="prompt-panel" aria-label="Промпт">
                 <div class="section-head">
                   <h3>Промпт</h3>
-                  <a id="open-provider-prompt" class="button secondary small link-button" href="https://chat.qwen.ai/" target="_blank" rel="noreferrer">Открыть сайт</a>
+                  <div class="section-actions">
+                    <button id="copy-prompt-btn" class="button secondary small" type="button" disabled>Копировать промпт</button>
+                    <a id="open-provider-prompt" class="button secondary small link-button" href="https://chat.qwen.ai/" target="_blank" rel="noreferrer">Открыть сайт</a>
+                  </div>
                 </div>
                 <textarea id="prompt-box" readonly spellcheck="false"></textarea>
               </section>
