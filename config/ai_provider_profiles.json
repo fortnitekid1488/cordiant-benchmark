@@ -1,0 +1,52 @@
+{
+  "qwen": {
+    "label": "Qwen",
+    "site_label": "Qwen Studio",
+    "url": "https://chat.qwen.ai/",
+    "response_label": "Ответ Qwen",
+    "paste_placeholder": "Вставь сюда полный ответ Qwen",
+    "max_upload_files_per_batch": 5,
+    "limit_summary": "Qwen web: до 5 файлов на один батч. API Qwen-Long отдельно умеет ссылаться на больше файлов, но этот dashboard режет под web-интерфейс.",
+    "limit_confidence": "operator-observed"
+  },
+  "gemini": {
+    "label": "Gemini",
+    "site_label": "Google AI Studio",
+    "url": "https://aistudio.google.com/prompts/new_chat",
+    "response_label": "Ответ Gemini",
+    "paste_placeholder": "Вставь сюда полный ответ Gemini",
+    "max_upload_files_per_batch": 0,
+    "limit_summary": "Google AI Studio: file-count лимит для текущего ручного workflow не задаем; оставляем старое дробление по объему входа.",
+    "limit_confidence": "project-verified"
+  },
+  "kimi": {
+    "label": "Kimi",
+    "site_label": "Kimi",
+    "url": "https://www.kimi.com/",
+    "response_label": "Ответ Kimi",
+    "paste_placeholder": "Вставь сюда полный ответ Kimi",
+    "max_upload_files_per_batch": 50,
+    "limit_summary": "Kimi web: используем практический лимит 50 файлов на батч. Kimi API хранит до 1,000 файлов на пользователя, но web-оператору безопаснее держать батчи меньше.",
+    "limit_confidence": "public-web-reports"
+  },
+  "mimo": {
+    "label": "MiMo",
+    "site_label": "Xiaomi MiMo",
+    "url": "https://aistudio.xiaomimimo.com/#/c",
+    "response_label": "Ответ MiMo",
+    "paste_placeholder": "Вставь сюда полный ответ MiMo",
+    "max_upload_files_per_batch": 5,
+    "limit_summary": "Xiaomi MiMo: устойчивого публичного web-лимита для документов не нашлось, поэтому используем безопасные 5 файлов на батч.",
+    "limit_confidence": "conservative"
+  },
+  "deepseek": {
+    "label": "DeepSeek",
+    "site_label": "DeepSeek",
+    "url": "https://chat.deepseek.com/",
+    "response_label": "Ответ DeepSeek",
+    "paste_placeholder": "Вставь сюда полный ответ DeepSeek",
+    "max_upload_files_per_batch": 20,
+    "limit_summary": "DeepSeek web: используем консервативные 20 файлов на батч; официальные API-доки подтверждают file upload, но не дают стабильный web file-count лимит.",
+    "limit_confidence": "conservative"
+  }
+}

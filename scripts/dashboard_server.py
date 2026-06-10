@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import errno
 import json
 import os
@@ -22,6 +23,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = ROOT / "web"
+PROVIDER_PROFILES_PATH = ROOT / "config" / "ai_provider_profiles.json"
 
 MODE_CONFIG = {
     "quarterly": {
@@ -44,17 +46,38 @@ PREPARE_LOCK = threading.RLock()
 PREPARE_JOBS: dict[str, dict[str, Any]] = {}
 
 
-def package_path(mode: str) -> Path | None:
+def load_provider_profiles() -> dict[str, dict[str, Any]]:
+    return json.loads(PROVIDER_PROFILES_PATH.read_text(encoding="utf-8"))
+
+
+PROVIDER_PROFILES = load_provider_profiles()
+
+
+def normalize_provider(provider: str | None) -> str:
+    return provider if provider in PROVIDER_PROFILES else "qwen"
+
+
+def latest_file_for_provider(mode: str, provider: str) -> Path:
+    return ROOT / "outputs" / f"latest_aistudio_{mode}_{normalize_provider(provider)}_package_path.txt"
+
+
+def read_path_pointer(path_file: Path) -> Path | None:
+    if not path_file.exists():
+        return None
+    text = path_file.read_text(encoding="utf-8").strip()
+    return Path(text).resolve() if text else None
+
+
+def package_path(mode: str, provider: str | None = None) -> Path | None:
     config = MODE_CONFIG[mode]
+    if provider:
+        provider_path = read_path_pointer(latest_file_for_provider(mode, provider))
+        if provider_path:
+            return provider_path
     package_link = config["symlink"]
     if package_link.exists() and package_link.is_dir():
         return package_link.resolve()
-    latest_file = config["latest_file"]
-    if latest_file.exists():
-        text = latest_file.read_text(encoding="utf-8").strip()
-        if text:
-            return Path(text).resolve()
-    return None
+    return read_path_pointer(config["latest_file"])
 
 
 def update_package_pointer(mode: str, target: Path) -> None:
@@ -147,9 +170,13 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def public_prepare_job(mode: str) -> dict[str, Any] | None:
+def prepare_job_key(mode: str, provider: str) -> str:
+    return f"{mode}:{normalize_provider(provider)}"
+
+
+def public_prepare_job(mode: str, provider: str) -> dict[str, Any] | None:
     with PREPARE_LOCK:
-        job = PREPARE_JOBS.get(mode)
+        job = PREPARE_JOBS.get(prepare_job_key(mode, provider))
         if not job:
             return None
         return {
@@ -169,12 +196,13 @@ def public_prepare_job(mode: str) -> dict[str, Any] | None:
         }
 
 
-def prepare_worker(mode: str) -> None:
+def prepare_worker(mode: str, provider: str) -> None:
+    key = prepare_job_key(mode, provider)
     try:
-        result = run_project_command(MODE_CONFIG[mode]["prepare_args"])
+        result = run_project_command([*MODE_CONFIG[mode]["prepare_args"], "--provider", normalize_provider(provider)])
         if not result["ok"]:
             with PREPARE_LOCK:
-                PREPARE_JOBS[mode].update(
+                PREPARE_JOBS[key].update(
                     {
                         "state": "error",
                         "finished_at": iso_now(),
@@ -191,7 +219,7 @@ def prepare_worker(mode: str) -> None:
         path = Path(lines[-1]).resolve()
         update_package_pointer(mode, path)
         with PREPARE_LOCK:
-            PREPARE_JOBS[mode].update(
+            PREPARE_JOBS[key].update(
                 {
                     "state": "complete",
                     "finished_at": iso_now(),
@@ -202,7 +230,7 @@ def prepare_worker(mode: str) -> None:
             )
     except Exception as exc:  # noqa: BLE001
         with PREPARE_LOCK:
-            PREPARE_JOBS.setdefault(mode, {"mode": mode}).update(
+            PREPARE_JOBS.setdefault(key, {"mode": mode, "provider": normalize_provider(provider)}).update(
                 {
                     "state": "error",
                     "finished_at": iso_now(),
@@ -211,20 +239,23 @@ def prepare_worker(mode: str) -> None:
             )
 
 
-def start_prepare_job(mode: str) -> dict[str, Any]:
+def start_prepare_job(mode: str, provider: str) -> dict[str, Any]:
+    provider = normalize_provider(provider)
+    key = prepare_job_key(mode, provider)
     with PREPARE_LOCK:
-        current = PREPARE_JOBS.get(mode)
+        current = PREPARE_JOBS.get(key)
         if current and current.get("state") == "running":
-            return public_prepare_job(mode) or current
-        PREPARE_JOBS[mode] = {
+            return public_prepare_job(mode, provider) or current
+        PREPARE_JOBS[key] = {
             "mode": mode,
+            "provider": provider,
             "state": "running",
             "started_at": iso_now(),
             "message": "Готовлю пакет источников. Full-download обычно занимает 1-3 минуты.",
         }
-        thread = threading.Thread(target=prepare_worker, args=(mode,), daemon=True)
+        thread = threading.Thread(target=prepare_worker, args=(mode, provider), daemon=True)
         thread.start()
-        return public_prepare_job(mode) or PREPARE_JOBS[mode]
+        return public_prepare_job(mode, provider) or PREPARE_JOBS[key]
 
 
 def safe_resolve(path_value: str | Path) -> Path:
@@ -272,7 +303,18 @@ def summarize_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def batch_summary(mode: str, batch_dir: Path) -> dict[str, Any]:
+def package_metadata(path: Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    return read_json(path / "package_metadata.json")
+
+
+def provider_upload_limit(provider: str) -> int:
+    profile = PROVIDER_PROFILES[normalize_provider(provider)]
+    return int(profile.get("max_upload_files_per_batch") or 0)
+
+
+def batch_summary(mode: str, batch_dir: Path, provider: str = "qwen") -> dict[str, Any]:
     manifest = read_json(batch_dir / "source_manifest.json") or {}
     upload_file = batch_dir / "FILES_TO_UPLOAD.txt"
     upload_files = []
@@ -283,7 +325,7 @@ def batch_summary(mode: str, batch_dir: Path) -> dict[str, Any]:
             if line.strip() and not line.lstrip().startswith("#")
         ]
     prompt_path = batch_dir / "prompt_for_aistudio.txt"
-    package = package_path(mode)
+    package = package_path(mode, provider)
     json_path = package / "aistudio_json" / f"{batch_dir.name}.json" if package else batch_dir / f"{batch_dir.name}.json"
     payload = read_json(json_path) if json_path.exists() else None
     companies = [
@@ -302,13 +344,17 @@ def batch_summary(mode: str, batch_dir: Path) -> dict[str, Any]:
         for source in company.get("sources", [])
         if source.get("download_status") == "failed"
     )
+    upload_count = len(upload_files)
+    max_upload_files = provider_upload_limit(provider)
     return {
         "id": batch_dir.name,
         "title": manifest.get("title") or batch_dir.name,
         "companies": companies,
         "downloaded_sources": downloaded,
         "failed_sources": failed,
-        "upload_count": len(upload_files),
+        "upload_count": upload_count,
+        "provider_limit": max_upload_files,
+        "provider_limit_exceeded": bool(max_upload_files and upload_count > max_upload_files),
         "json_saved": json_path.exists(),
         "json_path": str(json_path) if json_path.exists() else None,
         "json_summary": summarize_payload(payload),
@@ -350,15 +396,18 @@ def ensure_upload_folder(batch_dir: Path) -> Path:
     return upload_dir
 
 
-def status_payload() -> dict[str, Any]:
+def status_payload(provider: str = "qwen") -> dict[str, Any]:
+    provider = normalize_provider(provider)
     modes = {}
     for mode in MODE_CONFIG:
-        path = package_path(mode)
+        path = package_path(mode, provider)
+        metadata = package_metadata(path)
+        package_provider = (metadata or {}).get("provider") or {}
         batches = []
         json_count = 0
         if path and path.exists():
             batches = [
-                batch_summary(mode, batch_dir)
+                batch_summary(mode, batch_dir, provider)
                 for batch_dir in sorted(path.glob("batch_*"))
                 if batch_dir.is_dir()
             ]
@@ -371,9 +420,11 @@ def status_payload() -> dict[str, Any]:
             "batch_count": len(batches),
             "json_count": json_count,
             "batches": batches,
-            "prepare_job": public_prepare_job(mode),
+            "prepare_job": public_prepare_job(mode, provider),
+            "package_provider": package_provider,
+            "provider_mismatch": bool(package_provider and package_provider.get("id") != provider),
         }
-    return {"root": str(ROOT), "modes": modes}
+    return {"root": str(ROOT), "provider": provider, "providers": PROVIDER_PROFILES, "modes": modes}
 
 
 def clean_aistudio_text(text: str) -> str:
@@ -388,12 +439,48 @@ def clean_aistudio_text(text: str) -> str:
 
 
 def parse_json_candidate(candidate: str) -> Any:
-    parsed = json.loads(candidate)
+    parse_errors: list[Exception] = []
+    for variant in relaxed_json_candidates(candidate):
+        try:
+            parsed = json.loads(variant)
+            break
+        except json.JSONDecodeError as exc:
+            parse_errors.append(exc)
+    else:
+        for variant in relaxed_json_candidates(candidate):
+            try:
+                parsed = ast.literal_eval(variant)
+                break
+            except (SyntaxError, ValueError) as exc:
+                parse_errors.append(exc)
+        else:
+            raise parse_errors[-1] if parse_errors else ValueError("JSON candidate is empty.")
     if isinstance(parsed, str):
         nested = clean_aistudio_text(parsed)
         if nested and nested != candidate and any(marker in nested for marker in ("{", "[")):
             return extract_json_payload(nested)
     return parsed
+
+
+def relaxed_json_candidates(candidate: str) -> list[str]:
+    cleaned = clean_aistudio_text(candidate)
+    variants = [cleaned]
+    relaxed = (
+        cleaned.replace("“", '"')
+        .replace("”", '"')
+        .replace("„", '"')
+        .replace("‟", '"')
+        .replace("‘", "'")
+        .replace("’", "'")
+    )
+    relaxed = re.sub(r",(\s*[}\]])", r"\1", relaxed)
+    relaxed = re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', relaxed)
+    relaxed = re.sub(r"\bNone\b", "null", relaxed)
+    relaxed = re.sub(r"\bTrue\b", "true", relaxed)
+    relaxed = re.sub(r"\bFalse\b", "false", relaxed)
+    if relaxed != cleaned:
+        variants.append(relaxed)
+    return variants
 
 
 def iter_fenced_json(text: str) -> list[str]:
@@ -515,8 +602,41 @@ def extract_json_payload(text: str) -> Any:
     raise ValueError("JSON обрывается до конца. Скопируй ответ модели целиком.")
 
 
-def get_batch_dir(mode: str, batch_id: str) -> Path:
-    package = package_path(mode)
+def extract_normalized_aistudio_payload(text: str) -> dict[str, Any]:
+    stripped = clean_aistudio_text(text)
+    if not stripped:
+        raise ValueError("Вставь ответ модели.")
+
+    candidates = [stripped, *iter_fenced_json(stripped), *iter_balanced_json(stripped)]
+    seen: set[str] = set()
+    last_parse_error: Exception | None = None
+    last_shape_error: Exception | None = None
+    for candidate in candidates:
+        candidate = clean_aistudio_text(candidate)
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            parsed = parse_json_candidate(candidate)
+        except (json.JSONDecodeError, ValueError, SyntaxError) as exc:
+            last_parse_error = exc
+            continue
+        try:
+            return normalize_aistudio_payload(parsed)
+        except ValueError as exc:
+            last_shape_error = exc
+
+    if last_shape_error:
+        raise last_shape_error
+    if not any(marker in stripped for marker in ("{", "[")):
+        raise ValueError("JSON не найден. Скопируй полный ответ модели, не только пояснение.")
+    if last_parse_error:
+        raise ValueError(f"JSON найден, но не читается: {last_parse_error}") from last_parse_error
+    raise ValueError("JSON обрывается до конца. Скопируй ответ модели целиком.")
+
+
+def get_batch_dir(mode: str, batch_id: str, provider: str = "qwen") -> Path:
+    package = package_path(mode, provider)
     if not package:
         raise ValueError("Package is not prepared yet.")
     batch_dir = (package / batch_id).resolve()
@@ -526,8 +646,8 @@ def get_batch_dir(mode: str, batch_id: str) -> Path:
     return batch_dir
 
 
-def assert_complete_json_set(mode: str) -> None:
-    package = package_path(mode)
+def assert_complete_json_set(mode: str, provider: str = "qwen") -> Path:
+    package = package_path(mode, provider)
     if not package or not package.exists():
         raise ValueError("Сначала подготовь пакет источников.")
     batches = [batch_dir for batch_dir in package.glob("batch_*") if batch_dir.is_dir()]
@@ -539,6 +659,7 @@ def assert_complete_json_set(mode: str) -> None:
         raise ValueError(
             f"Финальный Excel можно собрать только после всех JSON: сохранено {len(json_files)} из {len(batches)}."
         )
+    return package
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -559,6 +680,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         body = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -577,21 +699,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/dashboard.js":
             return self.send_file(WEB_DIR / "dashboard.js", "application/javascript; charset=utf-8")
         if parsed.path == "/api/status":
-            return self.send_json({"ok": True, **status_payload()})
+            query = urllib.parse.parse_qs(parsed.query)
+            provider = normalize_provider(query.get("provider", ["qwen"])[0])
+            return self.send_json({"ok": True, **status_payload(provider)})
         if parsed.path == "/api/batch":
             query = urllib.parse.parse_qs(parsed.query)
             try:
                 mode = query.get("mode", ["quarterly"])[0]
+                provider = normalize_provider(query.get("provider", ["qwen"])[0])
                 batch_id = query["batch"][0]
                 if mode not in MODE_CONFIG:
                     raise ValueError("Unknown mode.")
-                batch_dir = get_batch_dir(mode, batch_id)
+                batch_dir = get_batch_dir(mode, batch_id, provider)
                 prompt = (batch_dir / "prompt_for_aistudio.txt").read_text(encoding="utf-8")
                 upload_folder = ensure_upload_folder(batch_dir)
                 return self.send_json(
                     {
                         "ok": True,
-                        "batch": batch_summary(mode, batch_dir),
+                        "batch": batch_summary(mode, batch_dir, provider),
                         "prompt": prompt,
                         "batch_path": str(batch_dir),
                         "upload_folder_path": str(upload_folder),
@@ -605,22 +730,53 @@ class DashboardHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         try:
             payload = self.read_body()
+            if parsed.path == "/api/status":
+                provider = normalize_provider(payload.get("provider", "qwen"))
+                return self.send_json({"ok": True, **status_payload(provider)})
+
+            if parsed.path == "/api/batch":
+                mode = payload.get("mode", "quarterly")
+                provider = normalize_provider(payload.get("provider", "qwen"))
+                batch_id = payload.get("batch")
+                if mode not in MODE_CONFIG or not batch_id:
+                    raise ValueError("Mode and batch are required.")
+                batch_dir = get_batch_dir(mode, batch_id, provider)
+                prompt = (batch_dir / "prompt_for_aistudio.txt").read_text(encoding="utf-8")
+                upload_folder = ensure_upload_folder(batch_dir)
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "batch": batch_summary(mode, batch_dir, provider),
+                        "prompt": prompt,
+                        "batch_path": str(batch_dir),
+                        "upload_folder_path": str(upload_folder),
+                    }
+                )
+
             if parsed.path == "/api/prepare":
                 mode = payload.get("mode", "quarterly")
+                provider = normalize_provider(payload.get("provider", "qwen"))
                 if mode not in MODE_CONFIG:
                     raise ValueError("Unknown mode.")
-                return self.send_json({"ok": True, "prepare_job": start_prepare_job(mode), **status_payload()})
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "prepare_job": start_prepare_job(mode, provider),
+                        **status_payload(provider),
+                    }
+                )
 
             if parsed.path == "/api/save-json":
                 mode = payload.get("mode", "quarterly")
+                provider = normalize_provider(payload.get("provider", "qwen"))
                 batch_id = payload.get("batch")
                 text = payload.get("text", "")
                 if mode not in MODE_CONFIG or not batch_id:
                     raise ValueError("Mode and batch are required.")
-                batch_dir = get_batch_dir(mode, batch_id)
-                parsed_json = normalize_aistudio_payload(extract_json_payload(text))
+                batch_dir = get_batch_dir(mode, batch_id, provider)
+                parsed_json = extract_normalized_aistudio_payload(text)
                 validate_payload_matches_batch(batch_dir, parsed_json)
-                package = package_path(mode)
+                package = package_path(mode, provider)
                 assert package is not None
                 json_dir = package / "aistudio_json"
                 json_dir.mkdir(exist_ok=True)
@@ -631,16 +787,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "ok": True,
                         "json_path": str(json_path),
                         "summary": summarize_payload(parsed_json),
-                        **status_payload(),
+                        **status_payload(provider),
                     }
                 )
 
             if parsed.path == "/api/start-batch":
                 mode = payload.get("mode", "quarterly")
+                provider = normalize_provider(payload.get("provider", "qwen"))
                 batch_id = payload.get("batch")
                 if mode not in MODE_CONFIG or not batch_id:
                     raise ValueError("Mode and batch are required.")
-                batch_dir = get_batch_dir(mode, batch_id)
+                batch_dir = get_batch_dir(mode, batch_id, provider)
                 prompt = (batch_dir / "prompt_for_aistudio.txt").read_text(encoding="utf-8")
                 upload_folder = ensure_upload_folder(batch_dir)
                 copy_text_to_clipboard(prompt)
@@ -648,7 +805,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return self.send_json(
                     {
                         "ok": True,
-                        "batch": batch_summary(mode, batch_dir),
+                        "batch": batch_summary(mode, batch_dir, provider),
                         "prompt_chars": len(prompt),
                         "upload_folder_path": str(upload_folder),
                     }
@@ -656,10 +813,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/api/apply":
                 mode = payload.get("mode", "quarterly")
+                provider = normalize_provider(payload.get("provider", "qwen"))
                 if mode not in MODE_CONFIG:
                     raise ValueError("Unknown mode.")
-                assert_complete_json_set(mode)
-                result = run_project_command(MODE_CONFIG[mode]["apply_args"])
+                package = assert_complete_json_set(mode, provider)
+                result = run_project_command(
+                    [
+                        *MODE_CONFIG[mode]["apply_args"],
+                        "--json-dir",
+                        str(package / "aistudio_json"),
+                    ]
+                )
                 if not result["ok"]:
                     return self.send_json({"ok": False, **result}, 500)
                 output_path = None

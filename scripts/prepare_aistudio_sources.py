@@ -28,6 +28,7 @@ from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "config" / "company_source_registry.json"
+PROVIDER_PROFILES_PATH = ROOT / "config" / "ai_provider_profiles.json"
 SCHEMA_PATH = ROOT / "templates" / "aistudio_latest_quarter_schema.json"
 PROMPT_TEMPLATE_PATH = ROOT / "templates" / "aistudio_prompt_template.txt"
 DEFAULT_MAX_COMPANIES_PER_BATCH = 6
@@ -140,6 +141,22 @@ def source_filename(company_key: str, index: int, url: str, content_type: str | 
 
 
 FAST_DOWNLOAD_TYPES = {"official_api", "official_pdf", "official_excel", "official_press_release"}
+
+
+def load_provider_profiles() -> dict[str, dict]:
+    return json.loads(PROVIDER_PROFILES_PATH.read_text(encoding="utf-8"))
+
+
+def provider_label(provider_profile: dict | None) -> str:
+    if not provider_profile:
+        return "selected provider"
+    return provider_profile.get("label") or "selected provider"
+
+
+def provider_upload_limit(provider_profile: dict | None) -> int:
+    if not provider_profile:
+        return 0
+    return int(provider_profile.get("max_upload_files_per_batch") or 0)
 
 
 def schema_text_for_mode(mode: str) -> str:
@@ -348,6 +365,31 @@ def upload_files_for_batch(batch_manifest: dict) -> list[str]:
     return files
 
 
+def upload_files_for_company(company_manifest: dict) -> list[str]:
+    files: list[str] = []
+    for source in company_manifest.get("sources", []):
+        upload_file = source.get("ai_studio_upload_file")
+        if not upload_file and source.get("downloaded_file", "").endswith(".xlsx"):
+            upload_file = source.get("text_extract_file")
+        if not upload_file:
+            upload_file = source.get("downloaded_file")
+        if upload_file:
+            files.append(upload_file)
+    return files
+
+
+def estimated_upload_files_for_company(company: dict, mode: str, download_mode: str) -> int:
+    count = 0
+    for source in company.get("sources", []):
+        mode_source = source_for_mode(source, mode)
+        if mode_source is None:
+            continue
+        if download_mode == "fast" and mode_source.get("type") not in FAST_DOWNLOAD_TYPES:
+            continue
+        count += 1
+    return count
+
+
 def compact_source_manifest(batch_manifest: dict) -> dict:
     compact = {
         "batch_id": batch_manifest.get("batch_id"),
@@ -473,6 +515,8 @@ def prepare_batch(
     prompt_template: str,
     mode: str,
     download_mode: str,
+    provider: str,
+    provider_profile: dict,
 ) -> dict:
     batch_dir = output_dir / batch["batch_id"]
     sources_dir = batch_dir / "sources"
@@ -480,6 +524,12 @@ def prepare_batch(
     batch_manifest: dict = {
         "batch_id": batch["batch_id"],
         "title": batch["title"],
+        "provider": {
+            "id": provider,
+            "label": provider_label(provider_profile),
+            "max_upload_files_per_batch": provider_upload_limit(provider_profile),
+            "limit_summary": provider_profile.get("limit_summary"),
+        },
         "companies": [],
     }
 
@@ -574,6 +624,25 @@ def prepare_batch(
     shutil.copy2(SCHEMA_PATH, batch_dir / "aistudio_latest_quarter_schema.json")
     write_upload_list(batch_dir, batch_manifest)
     batch_manifest["input_estimate"] = batch_input_estimate(batch_dir)
+    max_upload_files = provider_upload_limit(provider_profile)
+    upload_count = batch_manifest["input_estimate"].get("upload_count", 0)
+    if max_upload_files > 0 and upload_count > max_upload_files:
+        oversize_companies = [
+            {
+                "key": company.get("key"),
+                "display_name": company.get("display_name"),
+                "upload_count": len(upload_files_for_company(company)),
+            }
+            for company in batch_manifest["companies"]
+            if len(upload_files_for_company(company)) > max_upload_files
+        ]
+        batch_manifest["provider_limit_warning"] = {
+            "message": (
+                f"Batch has {upload_count} upload files, above {provider_label(provider_profile)} "
+                f"limit of {max_upload_files}. Split further or reduce sources."
+            ),
+            "oversize_companies": oversize_companies,
+        }
     write_manifest(batch_dir, batch_manifest)
     return batch_manifest
 
@@ -602,6 +671,56 @@ def split_batches(batches: list[dict], max_companies_per_batch: int) -> list[dic
     return split
 
 
+def split_one_batch_by_upload_limit(
+    batch: dict,
+    company_lookup: dict[str, dict],
+    mode: str,
+    download_mode: str,
+    max_upload_files: int,
+) -> list[dict]:
+    if max_upload_files <= 0:
+        return [batch]
+
+    parts: list[list[str]] = []
+    current: list[str] = []
+    current_count = 0
+    for company_key in batch["companies"]:
+        company_count = estimated_upload_files_for_company(company_lookup[company_key], mode, download_mode)
+        if current and current_count + company_count > max_upload_files:
+            parts.append(current)
+            current = []
+            current_count = 0
+        current.append(company_key)
+        current_count += company_count
+    if current:
+        parts.append(current)
+
+    if len(parts) <= 1:
+        return [batch]
+
+    return [
+        {
+            "batch_id": f"{batch['batch_id']}_part_{index}",
+            "title": f"{batch['title']} part {index}",
+            "companies": companies,
+        }
+        for index, companies in enumerate(parts, start=1)
+    ]
+
+
+def split_batches_by_upload_limit(
+    batches: list[dict],
+    company_lookup: dict[str, dict],
+    mode: str,
+    download_mode: str,
+    max_upload_files: int,
+) -> list[dict]:
+    split: list[dict] = []
+    for batch in batches:
+        split.extend(split_one_batch_by_upload_limit(batch, company_lookup, mode, download_mode, max_upload_files))
+    return split
+
+
 def split_batch_in_half(batch: dict) -> list[dict]:
     companies = batch["companies"]
     split_size = math.ceil(len(companies) / 2)
@@ -617,6 +736,9 @@ def prepare_batch_with_budget(
     mode: str,
     download_mode: str,
     max_estimated_input_tokens: int,
+    max_upload_files: int,
+    provider: str,
+    provider_profile: dict,
 ) -> list[dict]:
     batch_manifest = prepare_batch(
         batch,
@@ -626,16 +748,34 @@ def prepare_batch_with_budget(
         prompt_template,
         mode,
         download_mode,
+        provider,
+        provider_profile,
     )
     estimate = batch_manifest.get("input_estimate", {})
-    if (
+    token_limit_exceeded = (
         max_estimated_input_tokens > 0
         and estimate.get("approx_input_tokens", 0) > max_estimated_input_tokens
-        and len(batch["companies"]) > 1
-    ):
+    )
+    file_limit_exceeded = (
+        max_upload_files > 0
+        and estimate.get("upload_count", 0) > max_upload_files
+    )
+    if (token_limit_exceeded or file_limit_exceeded) and len(batch["companies"]) > 1:
         shutil.rmtree(output_dir / batch["batch_id"])
         manifests: list[dict] = []
-        for smaller_batch in split_batch_in_half(batch):
+        if file_limit_exceeded:
+            smaller_batches = split_one_batch_by_upload_limit(
+                batch,
+                company_lookup,
+                mode,
+                download_mode,
+                max_upload_files,
+            )
+            if len(smaller_batches) == 1:
+                smaller_batches = split_batch_in_half(batch)
+        else:
+            smaller_batches = split_batch_in_half(batch)
+        for smaller_batch in smaller_batches:
             manifests.extend(
                 prepare_batch_with_budget(
                     smaller_batch,
@@ -646,17 +786,52 @@ def prepare_batch_with_budget(
                     mode,
                     download_mode,
                     max_estimated_input_tokens,
+                    max_upload_files,
+                    provider,
+                    provider_profile,
                 )
             )
         return manifests
     return [batch_manifest]
 
 
-def write_instructions(output_dir: Path, batch_manifests: list[dict], mode: str) -> None:
+def write_package_metadata(output_dir: Path, batch_manifests: list[dict], mode: str, provider: str, provider_profile: dict) -> None:
+    metadata = {
+        "mode": mode,
+        "provider": {
+            "id": provider,
+            "label": provider_label(provider_profile),
+            "site_label": provider_profile.get("site_label"),
+            "max_upload_files_per_batch": provider_upload_limit(provider_profile),
+            "limit_summary": provider_profile.get("limit_summary"),
+            "limit_confidence": provider_profile.get("limit_confidence"),
+        },
+        "batch_count": len(batch_manifests),
+        "batches": [
+            {
+                "batch_id": manifest.get("batch_id"),
+                "upload_count": manifest.get("input_estimate", {}).get("upload_count", 0),
+                "approx_input_tokens": manifest.get("input_estimate", {}).get("approx_input_tokens", 0),
+            }
+            for manifest in batch_manifests
+        ],
+    }
+    (output_dir / "package_metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_instructions(output_dir: Path, batch_manifests: list[dict], mode: str, provider_profile: dict) -> None:
+    max_upload_files = provider_upload_limit(provider_profile)
+    upload_limit_text = (
+        f"Selected provider: {provider_label(provider_profile)}. Each batch is split to at most {max_upload_files} upload files."
+        if max_upload_files > 0
+        else f"Selected provider: {provider_label(provider_profile)}. No hard file-count split is applied; batches are controlled by input-token estimate."
+    )
     lines = [
         f"# LLM {MODE_CONFIG[mode]['mode_label']} Package",
         "",
-        "Use this package manually in Qwen Studio by default, or in the provider selected in the dashboard.",
+        upload_limit_text,
+        "",
+        "Use this package manually in the provider selected in the dashboard.",
         "",
         "1. Open one batch folder.",
         "2. In the provider web UI, turn off web search / grounding for this extraction run if that option is enabled.",
@@ -684,7 +859,9 @@ def write_instructions(output_dir: Path, batch_manifests: list[dict], mode: str)
         estimate = manifest.get("input_estimate", {})
         approx_tokens = estimate.get("approx_input_tokens")
         estimate_text = f", approx input {approx_tokens:,} tokens" if approx_tokens else ""
-        lines.append(f"- `{manifest['batch_id']}`: downloaded {downloaded}, failed {failed}{estimate_text}")
+        upload_count = estimate.get("upload_count", 0)
+        limit_warning = " WARNING: above provider file limit" if manifest.get("provider_limit_warning") else ""
+        lines.append(f"- `{manifest['batch_id']}`: {upload_count} upload files, downloaded {downloaded}, failed {failed}{estimate_text}{limit_warning}")
     lines.append("")
     (output_dir / "README_FOR_USER.md").write_text("\n".join(lines), encoding="utf-8")
 
@@ -695,6 +872,13 @@ def main() -> int:
     parser.add_argument("--mode", choices=sorted(MODE_CONFIG), default="quarterly")
     parser.add_argument("--workbook", type=Path, default=ROOT / "Бенч финансовой отчетности_мэйджоры.xlsx")
     parser.add_argument("--download-mode", choices=["fast", "full"], default="fast")
+    provider_profiles = load_provider_profiles()
+    parser.add_argument("--provider", choices=sorted(provider_profiles), default="qwen")
+    parser.add_argument(
+        "--max-upload-files-per-batch",
+        type=int,
+        help="Override selected provider file-count limit. Use 0 to disable file-count splitting.",
+    )
     parser.add_argument(
         "--max-companies-per-batch",
         type=int,
@@ -716,6 +900,12 @@ def main() -> int:
     schema_text = SCHEMA_PATH.read_text(encoding="utf-8")
     prompt_template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
     company_lookup = {company["key"]: company for company in registry["companies"]}
+    provider_profile = provider_profiles[args.provider]
+    max_upload_files = (
+        args.max_upload_files_per_batch
+        if args.max_upload_files_per_batch is not None
+        else provider_upload_limit(provider_profile)
+    )
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output_dir = (args.output_dir / f"{MODE_CONFIG[args.mode]['folder_prefix']}_{run_id}").resolve()
@@ -723,6 +913,13 @@ def main() -> int:
     (output_dir / "aistudio_json").mkdir(exist_ok=True)
 
     batches = split_batches(registry["batches"], args.max_companies_per_batch)
+    batches = split_batches_by_upload_limit(
+        batches,
+        company_lookup,
+        args.mode,
+        args.download_mode,
+        max_upload_files,
+    )
     batch_manifests: list[dict] = []
     for batch in batches:
         batch_manifests.extend(
@@ -735,10 +932,18 @@ def main() -> int:
                 args.mode,
                 args.download_mode,
                 args.max_estimated_input_tokens,
+                max_upload_files,
+                args.provider,
+                provider_profile,
             )
         )
-    write_instructions(output_dir, batch_manifests, args.mode)
+    write_package_metadata(output_dir, batch_manifests, args.mode, args.provider, provider_profile)
+    write_instructions(output_dir, batch_manifests, args.mode, provider_profile)
     (ROOT / "outputs" / f"latest_aistudio_{args.mode}_package_path.txt").write_text(str(output_dir), encoding="utf-8")
+    (ROOT / "outputs" / f"latest_aistudio_{args.mode}_{args.provider}_package_path.txt").write_text(
+        str(output_dir),
+        encoding="utf-8",
+    )
     print(output_dir)
     return 0
 

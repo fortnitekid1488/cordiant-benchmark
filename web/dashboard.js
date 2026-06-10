@@ -1,10 +1,12 @@
-const PROVIDERS = {
+const FALLBACK_PROVIDERS = {
   qwen: {
     label: "Qwen",
     siteLabel: "Qwen Studio",
     url: "https://chat.qwen.ai/",
     responseLabel: "Ответ Qwen",
     pastePlaceholder: "Вставь сюда полный ответ Qwen",
+    maxUploadFilesPerBatch: 5,
+    limitSummary: "Qwen web: до 5 файлов на один батч.",
   },
   gemini: {
     label: "Gemini",
@@ -12,6 +14,8 @@ const PROVIDERS = {
     url: "https://aistudio.google.com/prompts/new_chat",
     responseLabel: "Ответ Gemini",
     pastePlaceholder: "Вставь сюда полный ответ Gemini",
+    maxUploadFilesPerBatch: 0,
+    limitSummary: "Google AI Studio: file-count лимит для этого workflow не задаем.",
   },
   kimi: {
     label: "Kimi",
@@ -19,6 +23,8 @@ const PROVIDERS = {
     url: "https://www.kimi.com/",
     responseLabel: "Ответ Kimi",
     pastePlaceholder: "Вставь сюда полный ответ Kimi",
+    maxUploadFilesPerBatch: 50,
+    limitSummary: "Kimi web: практический лимит 50 файлов на батч.",
   },
   mimo: {
     label: "MiMo",
@@ -26,6 +32,8 @@ const PROVIDERS = {
     url: "https://aistudio.xiaomimimo.com/#/c",
     responseLabel: "Ответ MiMo",
     pastePlaceholder: "Вставь сюда полный ответ MiMo",
+    maxUploadFilesPerBatch: 5,
+    limitSummary: "Xiaomi MiMo: безопасные 5 файлов на батч.",
   },
   deepseek: {
     label: "DeepSeek",
@@ -33,8 +41,12 @@ const PROVIDERS = {
     url: "https://chat.deepseek.com/",
     responseLabel: "Ответ DeepSeek",
     pastePlaceholder: "Вставь сюда полный ответ DeepSeek",
+    maxUploadFilesPerBatch: 20,
+    limitSummary: "DeepSeek web: консервативные 20 файлов на батч.",
   },
 };
+
+let PROVIDERS = { ...FALLBACK_PROVIDERS };
 
 const state = {
   mode: "quarterly",
@@ -61,6 +73,7 @@ const el = {
   prepareBtn: must("#prepare-btn"),
   revealPackageBtn: must("#reveal-package-btn"),
   providerSelect: must("#provider-select"),
+  providerLimitNote: must("#provider-limit-note"),
   openProviderSidebar: must("#open-provider-sidebar"),
   openProviderPrompt: must("#open-provider-prompt"),
   refreshBtn: must("#refresh-btn"),
@@ -102,6 +115,34 @@ function normalizeProvider(provider) {
 
 function providerInfo() {
   return PROVIDERS[state.provider] || PROVIDERS.qwen;
+}
+
+function normalizeProviderProfile(profile) {
+  if (!profile) return null;
+  return {
+    label: profile.label,
+    siteLabel: profile.site_label || profile.siteLabel || profile.label,
+    url: profile.url,
+    responseLabel: profile.response_label || profile.responseLabel || `Ответ ${profile.label}`,
+    pastePlaceholder: profile.paste_placeholder || profile.pastePlaceholder || `Вставь сюда полный ответ ${profile.label}`,
+    maxUploadFilesPerBatch: Number(profile.max_upload_files_per_batch ?? profile.maxUploadFilesPerBatch ?? 0),
+    limitSummary: profile.limit_summary || profile.limitSummary || "",
+    limitConfidence: profile.limit_confidence || profile.limitConfidence || "",
+  };
+}
+
+function syncProvidersFromStatus(status) {
+  if (!status?.providers) return;
+  const next = {};
+  Object.entries(status.providers).forEach(([key, profile]) => {
+    next[key] = normalizeProviderProfile(profile);
+  });
+  PROVIDERS = { ...FALLBACK_PROVIDERS, ...next };
+  if (!PROVIDERS[state.provider]) {
+    state.provider = "qwen";
+    localStorage.setItem("cordiant-provider", state.provider);
+  }
+  renderProvider();
 }
 
 function modeInfo(status = state.status) {
@@ -191,11 +232,15 @@ function setMode(mode) {
   autoSelectNextBatch().catch((error) => showToast(error.message));
 }
 
-function setProvider(provider) {
+async function setProvider(provider) {
   state.provider = normalizeProvider(provider);
   localStorage.setItem("cordiant-provider", state.provider);
+  state.status = null;
+  state.selectedBatch = null;
+  state.selectedBatchData = null;
   renderProvider();
   render();
+  await refreshStatus();
 }
 
 function renderProvider() {
@@ -210,6 +255,10 @@ function renderProvider() {
   el.openProviderPrompt.title = `Открыть ${provider.siteLabel}`;
   el.jsonSectionTitle.textContent = provider.responseLabel;
   el.jsonBox.placeholder = provider.pastePlaceholder;
+  const limitText = provider.maxUploadFilesPerBatch
+    ? `Лимит: ${provider.maxUploadFilesPerBatch} файлов на батч.`
+    : "Лимит файлов: не режем, контролируем объем входа.";
+  el.providerLimitNote.textContent = provider.limitSummary || limitText;
 }
 
 function syncPreparePolling() {
@@ -235,6 +284,7 @@ function render() {
   const nextBatch = batches.find((batch) => !batch.json_saved);
   const progress = batchCount ? Math.round((jsonCount / batchCount) * 100) : 0;
   const provider = providerInfo();
+  const packageProvider = info.package_provider || {};
 
   el.currentModeLabel.textContent = modeLabel();
   el.packageState.textContent = preparing ? "готовлю" : info.package_exists ? "готов" : "нет";
@@ -245,7 +295,11 @@ function render() {
   el.excelDetail.textContent = complete ? "можно собрать" : batchCount ? "нужны все JSON" : "нужен пакет";
   el.progressFill.style.width = `${complete ? 100 : progress}%`;
 
-  el.stepSources.textContent = preparing ? "скачиваю источники" : info.package_exists ? `${batchCount} батчей` : "не подготовлены";
+  el.stepSources.textContent = preparing
+    ? "скачиваю источники"
+    : info.package_exists
+      ? `${batchCount} батчей${packageProvider.label ? ` · ${packageProvider.label}` : ""}`
+      : "не подготовлены";
   el.stepJson.textContent = `${jsonCount} сохранено`;
   el.stepExcel.textContent = preparing ? "ждёт пакет" : complete ? "готов к финалу" : batchCount ? "нужны все JSON" : "нужен пакет";
   el.batchCount.textContent = String(batchCount);
@@ -268,6 +322,9 @@ function renderWorkflow({ preparing, job, info, nextBatch, complete, provider })
     el.workflowNote.textContent = "Пакет готовится: источники скачиваются, промпты и upload-папки собираются. Статус обновится автоматически.";
   } else if (job?.state === "error") {
     el.workflowNote.textContent = `Подготовка не завершилась: ${job.message || "ошибка"}`;
+  } else if (info.provider_mismatch) {
+    const packageProvider = info.package_provider?.label || "другого провайдера";
+    el.workflowNote.textContent = `Текущий пакет подготовлен для ${packageProvider}. Для ${provider.label} нажми «Подготовить источники», чтобы пересобрать батчи под его лимит файлов.`;
   } else if (!info.package_exists) {
     el.workflowNote.textContent = "Нажми «Подготовить источники». После этого очередь батчей появится здесь.";
   } else if (nextBatch) {
@@ -294,17 +351,18 @@ function renderBatchList({ preparing, batches }) {
   batches.forEach((batch) => {
     const item = document.createElement("button");
     item.type = "button";
-    item.className = `batch-item${state.selectedBatch === batch.id ? " active" : ""}`;
+    item.className = `batch-item${state.selectedBatch === batch.id ? " active" : ""}${batch.provider_limit_exceeded ? " limit-warning" : ""}`;
     item.setAttribute("aria-pressed", String(state.selectedBatch === batch.id));
     const review = batch.json_summary ? ` · review ${batch.json_summary.review}` : "";
     const saved = batch.json_saved ? "JSON сохранён" : "нет JSON";
+    const limitText = batch.provider_limit ? ` / лимит ${batch.provider_limit}` : "";
     item.innerHTML = `
       <span class="batch-topline">
         <strong>${escapeHtml(batch.id)}</strong>
         <em class="${batch.json_saved ? "saved" : "pending"}">${saved}</em>
       </span>
       <span class="batch-companies">${escapeHtml((batch.companies || []).join(", "))}</span>
-      <small>${batch.upload_count || 0} файлов · ${batch.downloaded_sources || 0} источников${review}</small>
+      <small>${batch.upload_count || 0}${limitText} файлов · ${batch.downloaded_sources || 0} источников${review}</small>
     `;
     item.addEventListener("click", () => selectBatch(batch.id));
     fragment.append(item);
@@ -336,15 +394,25 @@ function renderBatchDetail() {
   const summaryText = summary
     ? ` · ${summary.non_null}/${summary.facts} значений, review ${summary.review}`
     : "";
+  const providerLimitText = batch.provider_limit
+    ? ` · лимит ${batch.provider_limit} файлов`
+    : "";
   el.batchTitle.textContent = batch.id;
-  el.batchMeta.textContent = `${(batch.companies || []).join(", ")} · ${batch.upload_count || 0} файлов · ${batch.prompt_chars || 0} знаков промпта${summaryText}`;
+  el.batchMeta.textContent = `${(batch.companies || []).join(", ")} · ${batch.upload_count || 0} файлов${providerLimitText} · ${batch.prompt_chars || 0} знаков промпта${summaryText}`;
   el.batchStatus.textContent = batch.json_saved ? "JSON сохранён" : "нет JSON";
-  el.batchStatus.className = `status-pill ${batch.json_saved ? "ok" : "neutral"}`;
+  if (batch.provider_limit_exceeded) {
+    el.batchStatus.textContent = "выше лимита";
+  }
+  el.batchStatus.className = `status-pill ${batch.provider_limit_exceeded ? "warning" : batch.json_saved ? "ok" : "neutral"}`;
   el.startBatchBtn.disabled = !state.selectedBatchData.upload_folder_path || !state.selectedBatchData.prompt;
 }
 
 async function refreshStatus({ autoSelect = true } = {}) {
-  state.status = await api("/api/status");
+  state.status = await api("/api/status", {
+    method: "POST",
+    body: JSON.stringify({ provider: state.provider }),
+  });
+  syncProvidersFromStatus(state.status);
   if (!selectedBatchStillExists()) {
     state.selectedBatch = null;
     state.selectedBatchData = null;
@@ -360,14 +428,21 @@ async function refreshStatus({ autoSelect = true } = {}) {
 }
 
 async function selectBatch(batchId, { refresh = true } = {}) {
-  const payload = await api(`/api/batch?mode=${encodeURIComponent(state.mode)}&batch=${encodeURIComponent(batchId)}`);
+  const payload = await api("/api/batch", {
+    method: "POST",
+    body: JSON.stringify({ mode: state.mode, provider: state.provider, batch: batchId }),
+  });
   state.selectedBatch = batchId;
   state.selectedBatchData = payload;
   el.promptBox.value = payload.prompt;
   el.jsonBox.value = "";
   setJsonFeedback();
   if (refresh) {
-    state.status = await api("/api/status");
+    state.status = await api("/api/status", {
+      method: "POST",
+      body: JSON.stringify({ provider: state.provider }),
+    });
+    syncProvidersFromStatus(state.status);
   }
   render();
 }
@@ -384,7 +459,7 @@ async function prepareSources() {
   try {
     const payload = await api("/api/prepare", {
       method: "POST",
-      body: JSON.stringify({ mode: state.mode }),
+      body: JSON.stringify({ mode: state.mode, provider: state.provider }),
     });
     state.status = payload;
     state.selectedBatch = null;
@@ -415,7 +490,7 @@ async function saveJson() {
   try {
     const payload = await api("/api/save-json", {
       method: "POST",
-      body: JSON.stringify({ mode: state.mode, batch: savedBatch, text }),
+      body: JSON.stringify({ mode: state.mode, provider: state.provider, batch: savedBatch, text }),
     });
     state.status = payload;
     el.jsonBox.value = "";
@@ -444,7 +519,7 @@ async function applyExcel() {
   try {
     const payload = await api("/api/apply", {
       method: "POST",
-      body: JSON.stringify({ mode: state.mode }),
+      body: JSON.stringify({ mode: state.mode, provider: state.provider }),
     });
     state.lastOutputPath = payload.output_path;
     el.outputText.textContent = payload.output_path || "Итоговый Excel создан.";
@@ -479,7 +554,7 @@ async function startBatch() {
   try {
     await api("/api/start-batch", {
       method: "POST",
-      body: JSON.stringify({ mode: state.mode, batch: state.selectedBatch }),
+      body: JSON.stringify({ mode: state.mode, provider: state.provider, batch: state.selectedBatch }),
     });
     showToast(`Промпт скопирован. Загрузи файлы в ${providerInfo().label} из открытой папки.`);
   } catch (error) {
@@ -505,7 +580,9 @@ function escapeHtml(value) {
 
 el.modeQuarterly.addEventListener("click", () => setMode("quarterly"));
 el.modeAnnual.addEventListener("click", () => setMode("annual"));
-el.providerSelect.addEventListener("change", (event) => setProvider(event.target.value));
+el.providerSelect.addEventListener("change", (event) => {
+  setProvider(event.target.value).catch((error) => showToast(error.message));
+});
 el.refreshBtn.addEventListener("click", () => refreshStatus().catch((error) => showToast(error.message)));
 el.prepareBtn.addEventListener("click", prepareSources);
 el.applyBtn.addEventListener("click", applyExcel);
