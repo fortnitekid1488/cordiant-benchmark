@@ -64,6 +64,7 @@ Portable equivalents after local setup:
 ```
 
 ```bat
+update_from_github.cmd
 start_dashboard.cmd
 prepare_quarterly_sources.cmd
 prepare_annual_sources.cmd
