@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from workbook_paths import workbook_status
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = ROOT / "web"
@@ -424,7 +426,13 @@ def status_payload(provider: str = "qwen") -> dict[str, Any]:
             "package_provider": package_provider,
             "provider_mismatch": bool(package_provider and package_provider.get("id") != provider),
         }
-    return {"root": str(ROOT), "provider": provider, "providers": PROVIDER_PROFILES, "modes": modes}
+    return {
+        "root": str(ROOT),
+        "provider": provider,
+        "providers": PROVIDER_PROFILES,
+        "source_workbook": workbook_status(),
+        "modes": modes,
+    }
 
 
 def clean_aistudio_text(text: str) -> str:
@@ -833,6 +841,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 provider = normalize_provider(payload.get("provider", "qwen"))
                 if mode not in MODE_CONFIG:
                     raise ValueError("Unknown mode.")
+                source_workbook = workbook_status()
+                if not source_workbook.get("exists"):
+                    raise ValueError(source_workbook.get("message") or "Исходный Excel-шаблон не найден.")
                 package = assert_complete_json_set(mode, provider)
                 result = run_project_command(
                     [

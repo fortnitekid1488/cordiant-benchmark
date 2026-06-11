@@ -286,14 +286,23 @@ function render() {
   const progress = batchCount ? Math.round((jsonCount / batchCount) * 100) : 0;
   const provider = providerInfo();
   const packageProvider = info.package_provider || {};
+  const sourceWorkbook = state.status?.source_workbook || {};
+  const workbookReady = sourceWorkbook.exists !== false;
+  const canApply = complete && workbookReady;
 
   el.currentModeLabel.textContent = modeLabel();
   el.packageState.textContent = preparing ? "готовлю" : info.package_exists ? "готов" : "нет";
   el.packageDetail.textContent = preparing ? "скачиваю источники" : info.package_path ? shortPath(info.package_path) : "пакет не создан";
   el.jsonState.textContent = `${jsonCount}/${batchCount}`;
   el.jsonDetail.textContent = batchCount ? `${progress}% закрыто` : "нет батчей";
-  el.excelState.textContent = complete ? "готов" : "закрыт";
-  el.excelDetail.textContent = complete ? "можно собрать" : batchCount ? "нужны все JSON" : "нужен пакет";
+  el.excelState.textContent = !workbookReady ? "нет шаблона" : complete ? "готов" : "закрыт";
+  el.excelDetail.textContent = !workbookReady
+    ? "исходный Excel не найден"
+    : complete
+      ? "можно собрать"
+      : batchCount
+        ? "нужны все JSON"
+        : "нужен пакет";
   el.progressFill.style.width = `${complete ? 100 : progress}%`;
 
   el.stepSources.textContent = preparing
@@ -302,25 +311,39 @@ function render() {
       ? `${batchCount} батчей${packageProvider.label ? ` · ${packageProvider.label}` : ""}`
       : "не подготовлены";
   el.stepJson.textContent = `${jsonCount} сохранено`;
-  el.stepExcel.textContent = preparing ? "ждёт пакет" : complete ? "готов к финалу" : batchCount ? "нужны все JSON" : "нужен пакет";
+  el.stepExcel.textContent = !workbookReady
+    ? "нет исходного Excel"
+    : preparing
+      ? "ждёт пакет"
+      : complete
+        ? "готов к финалу"
+        : batchCount
+          ? "нужны все JSON"
+          : "нужен пакет";
   el.batchCount.textContent = String(batchCount);
 
   el.prepareBtn.disabled = preparing;
   el.prepareBtn.textContent = preparing ? "Готовлю источники..." : "Подготовить источники";
   el.prepareBtn.toggleAttribute("aria-busy", preparing);
   el.revealPackageBtn.disabled = preparing || !info.package_path;
-  el.applyBtn.disabled = preparing || !complete;
-  el.applyBtn.title = complete ? "" : "Финальная сборка доступна только после JSON для всех батчей";
+  el.applyBtn.disabled = preparing || !canApply;
+  el.applyBtn.title = !workbookReady
+    ? "Положи исходный Excel-шаблон в корень проекта"
+    : complete
+      ? ""
+      : "Финальная сборка доступна только после JSON для всех батчей";
 
-  renderWorkflow({ preparing, job, info, nextBatch, complete, provider });
+  renderWorkflow({ preparing, job, info, nextBatch, complete, provider, sourceWorkbook });
   renderBatchList({ preparing, batches });
   renderBatchDetail();
   syncPreparePolling();
 }
 
-function renderWorkflow({ preparing, job, info, nextBatch, complete, provider }) {
+function renderWorkflow({ preparing, job, info, nextBatch, complete, provider, sourceWorkbook }) {
   if (preparing) {
     el.workflowNote.textContent = "Пакет готовится: источники скачиваются, промпты и upload-папки собираются. Статус обновится автоматически.";
+  } else if (sourceWorkbook?.exists === false) {
+    el.workflowNote.textContent = `Исходный Excel-шаблон не найден: ${sourceWorkbook.expected_name}. Обнови проект или положи этот файл в корень папки.`;
   } else if (job?.state === "error") {
     el.workflowNote.textContent = `Подготовка не завершилась: ${job.message || "ошибка"}`;
   } else if (info.provider_mismatch) {

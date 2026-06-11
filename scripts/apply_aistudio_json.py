@@ -19,9 +19,10 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from workbook_paths import DEFAULT_WORKBOOK, resolve_workbook_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_WORKBOOK = ROOT / "Бенч финансовой отчетности_мэйджоры.xlsx"
 SUMMARY_SHEET = "Свод"
 OUTPUT_MAX_ROW = 59
 OUTPUT_MAX_COL = 31
@@ -616,6 +617,12 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs")
     parser.add_argument("--mode", choices=["quarterly", "annual"], default="quarterly")
     args = parser.parse_args()
+
+    try:
+        args.workbook = resolve_workbook_path(args.workbook)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     json_dir = args.json_dir
     if json_dir is None:
