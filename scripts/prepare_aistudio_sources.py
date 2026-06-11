@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
-"""Prepare LLM source bundles for latest-period extraction.
+"""Prepare latest-period source bundles for LLM extraction.
 
 The output is meant for a non-technical workflow:
-1. Run prepare_sources.command.
-2. Upload everything from a batch folder's `FILES_FOR_AI_STUDIO` folder to Qwen Studio or the selected provider.
-3. Paste that batch's prompt.
-4. Save the returned JSON into the prepared `aistudio_json` folder.
-5. Run update_excel_from_aistudio.command.
+1. Use the dashboard's Prepare Sources action, or run this script directly.
+2. Upload a batch folder's `FILES_FOR_AI_STUDIO` to the selected LLM provider.
+3. StockAnalysis is the primary uploaded source; official files are fallback-only.
+4. Use the dashboard's Build Excel action, or run `scripts/apply_aistudio_json.py`.
 """
 
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import math
 import re
 import shutil
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import date, datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
+import pandas as pd
 from openpyxl import load_workbook
 
 
@@ -34,18 +36,31 @@ PROMPT_TEMPLATE_PATH = ROOT / "templates" / "aistudio_prompt_template.txt"
 DEFAULT_MAX_COMPANIES_PER_BATCH = 6
 DEFAULT_MAX_ESTIMATED_INPUT_TOKENS = 64000
 APPROX_CHARS_PER_TOKEN = 4
+STOCKANALYSIS_STATEMENTS = (
+    ("income_statement", "financials", "StockAnalysis income statement fallback."),
+    ("balance_sheet", "financials/balance-sheet", "StockAnalysis balance sheet fallback."),
+    ("cash_flow", "financials/cash-flow-statement", "StockAnalysis cash flow fallback."),
+    ("employees", "employees", "StockAnalysis employee count table fallback."),
+)
+STOCKANALYSIS_FALLBACK_SOURCE_MODES = {
+    ("michelin", "quarterly"),
+}
 
 METRICS = [
     "Total Revenues",
+    "# employees",
     "Cost Of Revenues",
     "Gross Profit",
     "Gross Profit Margin %",
+    "Other Operating Expenses, Total",
+    "R&D Expenses",
     "Selling General & Admin Expenses",
     "Other Operating Expenses",
     "Operating Income",
     "EBIT Margin %",
     "EBITDA",
     "EBITDA Margin %",
+    "Total Receivables",
     "Net Income",
     "Accounts Receivable, Total",
     "Inventory",
@@ -57,6 +72,29 @@ METRICS = [
     "Levered Free Cash Flow",
     "Cash from Operations",
 ]
+
+STOCKANALYSIS_ROW_MAP = {
+    "Total Revenues": [("income_statement", "Revenue"), ("income_statement", "Operating Revenue"), ("income_statement", "Total Revenue")],
+    "Cost Of Revenues": [("income_statement", "Cost of Revenue")],
+    "Gross Profit": [("income_statement", "Gross Profit")],
+    "Other Operating Expenses, Total": [("income_statement", "Operating Expenses")],
+    "R&D Expenses": [("income_statement", "Research & Development")],
+    "Selling General & Admin Expenses": [("income_statement", "Selling, General & Admin")],
+    "Other Operating Expenses": [("income_statement", "Other Operating Expenses")],
+    "Operating Income": [("income_statement", "Operating Income"), ("income_statement", "EBIT")],
+    "EBITDA": [("income_statement", "EBITDA")],
+    "Net Income": [("income_statement", "Net Income"), ("income_statement", "Net Income to Company")],
+    "Total Receivables": [("balance_sheet", "Receivables")],
+    "Accounts Receivable, Total": [("balance_sheet", "Accounts Receivable"), ("balance_sheet", "Receivables")],
+    "Inventory": [("balance_sheet", "Inventory")],
+    "Total Current Liabilities": [("balance_sheet", "Total Current Liabilities")],
+    "Total Assets": [("balance_sheet", "Total Assets")],
+    "Total Equity": [("balance_sheet", "Shareholders' Equity"), ("balance_sheet", "Total Common Equity"), ("balance_sheet", "Total Equity")],
+    "Total Debt": [("balance_sheet", "Total Debt")],
+    "Capital Expenditure": [("cash_flow", "Capital Expenditures")],
+    "Levered Free Cash Flow": [("cash_flow", "Levered Free Cash Flow"), ("cash_flow", "Free Cash Flow")],
+    "Cash from Operations": [("cash_flow", "Operating Cash Flow")],
+}
 
 COMPACT_SCHEMA_TEMPLATE = """{
   "reporting_scope": "{{REPORTING_SCOPE}}",
@@ -121,6 +159,10 @@ def slugify(text: str) -> str:
     text = text.lower()
     text = re.sub(r"[^a-z0-9]+", "_", text)
     return text.strip("_") or "source"
+
+
+def normalize_label(value: object) -> str:
+    return " ".join(str(value or "").replace("\xa0", " ").strip().lower().split())
 
 
 def source_filename(company_key: str, index: int, url: str, content_type: str | None) -> str:
@@ -188,6 +230,45 @@ def is_quarter_specific_source(source: dict) -> bool:
     return any(re.search(pattern, normalized) for pattern in patterns)
 
 
+def is_stockanalysis_source(source: dict) -> bool:
+    return "stockanalysis.com" in str(source.get("url", "")).lower()
+
+
+def is_deterministic_stockanalysis_source(source: dict) -> bool:
+    return is_stockanalysis_source(source) and bool(source.get("stockanalysis_statement"))
+
+
+def stockanalysis_statement_url(url: str, statement_path: str) -> str:
+    parsed = urlparse(url)
+    base_path = parsed.path.split("/financials", 1)[0].rstrip("/")
+    path = f"{base_path}/{statement_path.strip('/')}/"
+    query = "" if statement_path.strip("/") == "employees" else parsed.query
+    return urlunparse(parsed._replace(path=path, query=query))
+
+
+def expand_stockanalysis_source(source: dict) -> list[dict]:
+    variants: list[dict] = []
+    for statement_key, statement_path, note in STOCKANALYSIS_STATEMENTS:
+        source_entry = dict(source)
+        source_entry["url"] = stockanalysis_statement_url(str(source["url"]), statement_path)
+        source_entry["stockanalysis_statement"] = statement_key
+        source_entry["note"] = note
+        variants.append(source_entry)
+    return variants
+
+
+def dedupe_sources(sources: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    result: list[dict] = []
+    for source in sources:
+        key = str(source.get("url") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(source)
+    return result
+
+
 def source_for_mode(source: dict, mode: str) -> dict | None:
     source_entry = dict(source)
     source_type = source_entry.get("type")
@@ -214,6 +295,37 @@ def source_for_mode(source: dict, mode: str) -> dict | None:
     return source_entry
 
 
+def selected_sources_for_company(company: dict, mode: str) -> list[dict]:
+    mode_sources = [
+        mode_source
+        for source in company.get("sources", [])
+        if (mode_source := source_for_mode(source, mode)) is not None
+    ]
+    stockanalysis_sources = [
+        expanded
+        for source in mode_sources
+        if is_stockanalysis_source(source)
+        for expanded in expand_stockanalysis_source(source)
+    ]
+    stockanalysis_sources = dedupe_sources(stockanalysis_sources)
+    if not stockanalysis_sources:
+        return dedupe_sources(mode_sources)
+
+    non_stockanalysis_sources = [
+        source
+        for source in mode_sources
+        if not is_stockanalysis_source(source)
+    ]
+    if (company.get("key"), mode) in STOCKANALYSIS_FALLBACK_SOURCE_MODES:
+        for source in non_stockanalysis_sources:
+            source["note"] = (
+                f"{source.get('note', '')} Use only when StockAnalysis does not provide the required target period."
+            ).strip()
+        return dedupe_sources([*stockanalysis_sources, *non_stockanalysis_sources])
+
+    return stockanalysis_sources
+
+
 def fetch_url(url: str, timeout: int = 6) -> tuple[bytes, str, str]:
     request = urllib.request.Request(
         url,
@@ -223,8 +335,16 @@ def fetch_url(url: str, timeout: int = 6) -> tuple[bytes, str, str]:
             "Accept-Language": "en-US,en;q=0.9",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read(), response.headers.get("content-type", ""), response.url
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read(), response.headers.get("content-type", ""), response.url
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404 and "/employees/" in url:
+            fallback_url = url.replace("/employees/", "/company/")
+            fallback_request = urllib.request.Request(fallback_url, headers=dict(request.header_items()))
+            with urllib.request.urlopen(fallback_request, timeout=timeout) as response:
+                return response.read(), response.headers.get("content-type", ""), response.url
+        raise
 
 
 def html_to_text(html: str) -> str:
@@ -267,6 +387,475 @@ def xlsx_to_text(workbook_path: Path, max_chars: int = 200000) -> str:
                 sections.append("\t".join(values))
         sections.append("")
     return "\n".join(sections)[:max_chars]
+
+
+def pdf_to_text(pdf_path: Path, max_chars: int = 160000) -> str:
+    """Convert uploaded official PDFs to a compact text extract for manual LLM review."""
+    try:
+        from pypdf import PdfReader
+    except Exception as exc:  # noqa: BLE001 - dependency may be absent on a fresh machine.
+        return f"# Could not extract text from {pdf_path.name}: {exc}"
+
+    sections = [f"# Extracted text from {pdf_path.name}", ""]
+    try:
+        reader = PdfReader(pdf_path)
+        for index, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            text = re.sub(r"[ \t]+", " ", text).strip()
+            if not text:
+                continue
+            sections.extend([f"## Page {index}", text, ""])
+            if sum(len(section) for section in sections) >= max_chars:
+                break
+    except Exception as exc:  # noqa: BLE001 - keep package generation resilient.
+        sections.append(f"Could not extract text: {exc}")
+
+    return "\n".join(sections)[:max_chars]
+
+
+def parse_stockanalysis_number(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value).strip()
+    if not text or text in {"-", "—", "–"}:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    text = text.strip("()")
+    text = text.replace(",", "").replace("%", "").replace("−", "-")
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return -number if negative else number
+
+
+def parse_stockanalysis_period_end(value: object) -> str | None:
+    text = str(value or "")
+    match = re.search(r"([A-Z][a-z]{2}\s+\d{1,2},\s+20\d{2})", text)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%b %d, %Y").date().isoformat()
+    except ValueError:
+        return None
+
+
+def parse_stockanalysis_date(value: object) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%b %d, %Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def stockanalysis_column_text(column: object) -> str:
+    if isinstance(column, tuple):
+        return " ".join(str(part or "") for part in column)
+    return str(column or "")
+
+
+def selected_stockanalysis_value_column(table: pd.DataFrame, mode: str) -> object:
+    if mode != "annual":
+        return table.columns[1]
+    for column in table.columns[1:]:
+        text = stockanalysis_column_text(column)
+        if re.search(r"\bttm\b|trailing", text, flags=re.I):
+            continue
+        return column
+    return table.columns[1]
+
+
+def stockanalysis_table_from_source(path: Path, mode: str) -> tuple[pd.DataFrame, str, str | None]:
+    table = pd.read_html(path)[0]
+    first_col = table.columns[0]
+    latest_col = selected_stockanalysis_value_column(table, mode)
+    if isinstance(latest_col, tuple):
+        period_label = str(latest_col[0])
+        period_end = parse_stockanalysis_period_end(latest_col[1])
+    else:
+        period_label = str(latest_col)
+        period_end = None
+    if latest_col != table.columns[1]:
+        table = table.loc[:, [first_col, latest_col]]
+    return table, period_label, period_end
+
+
+def stockanalysis_employees_from_source(
+    path: Path,
+    mode: str,
+    target_period_end: str | None,
+) -> tuple[float | None, str | None]:
+    table = pd.read_html(path)[0]
+    date_col = next((col for col in table.columns if normalize_label(col) == "date"), table.columns[0])
+    employee_col = next((col for col in table.columns if normalize_label(col) == "employees"), None)
+    if employee_col is None and len(table.columns) >= 2:
+        label_col = table.columns[0]
+        value_col = table.columns[1]
+        for _, row in table.iterrows():
+            if normalize_label(row[label_col]) == "employees":
+                employee_count = parse_stockanalysis_number(row[value_col])
+                if employee_count is not None:
+                    return employee_count, "Employees from StockAnalysis company profile"
+    if employee_col is None:
+        return None, None
+
+    target_date = parse_stockanalysis_date(target_period_end)
+    first_valid: tuple[date | None, float, str] | None = None
+    latest_annual: tuple[date | None, float, str] | None = None
+    latest_before_target: tuple[date | None, float, str] | None = None
+
+    for _, row in table.iterrows():
+        employee_count = parse_stockanalysis_number(row[employee_col])
+        if employee_count is None:
+            continue
+        row_date = parse_stockanalysis_date(row[date_col])
+        label = f"Employees as of {row_date.isoformat() if row_date else row[date_col]}"
+        if first_valid is None:
+            first_valid = (row_date, employee_count, label)
+        if row_date and row_date.month == 12 and latest_annual is None:
+            latest_annual = (row_date, employee_count, label)
+        if target_date and row_date and row_date <= target_date and latest_before_target is None:
+            latest_before_target = (row_date, employee_count, label)
+
+    selected = latest_before_target or (latest_annual if mode == "annual" else first_valid) or first_valid
+    if not selected:
+        return None, None
+    _, employee_count, label = selected
+    return employee_count, label
+
+
+def period_label_has_quarterly_issue(label: str) -> bool:
+    normalized = normalize_label(label)
+    if re.search(r"\b(h1|1h|h2|2h|9m|6m|ytd|ttm)\b|half[-\s]?year|six\s+months|nine\s+months", normalized):
+        return True
+    return not bool(
+        re.search(
+            r"\b(q[1-4]|[1-4]q)\b|first\s+quarter|second\s+quarter|third\s+quarter|fourth\s+quarter|"
+            r"\bquarterly\b|three\s+months|3\s+months",
+            normalized,
+        )
+    )
+
+
+def text_from_source(batch_dir: Path, source: dict) -> str:
+    rel_path = source.get("text_extract_file") or source.get("downloaded_file")
+    if not rel_path:
+        return ""
+    source_path = batch_dir / rel_path
+    if not source_path.exists():
+        return ""
+    if source_path.suffix.lower() == ".pdf":
+        try:
+            from pypdf import PdfReader
+
+            return "\n".join(page.extract_text() or "" for page in PdfReader(source_path).pages)
+        except Exception:  # noqa: BLE001 - best-effort official-source extraction.
+            return ""
+    try:
+        return source_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001 - best-effort official-source extraction.
+        return ""
+
+
+def parse_michelin_quarterly_period(text: str) -> tuple[str, str] | None:
+    if re.search(r"\b2026\s+Q1\b|\bQ1\s+2026\b|first\s+quarter", text, flags=re.I):
+        return "Q1 2026", "2026-03-31"
+    return None
+
+
+def parse_michelin_quarterly_revenue(text: str) -> tuple[float, str] | None:
+    exact_patterns = [
+        r"Q1 revenue:.*?\b2025\s+Q1\b.*?\b2026\s+Q1\s+at\s+constant\s+FX\b.*?\b2026\s+Q1\s+at\s+current\s+FX\b",
+        r"Group revenue:.*?\bQ1\s+2026\b.*?\bGroup\b",
+    ]
+    for pattern in exact_patterns:
+        match = re.search(pattern, text, flags=re.I | re.S)
+        if not match:
+            continue
+        numbers = [float(value.replace(",", "")) for value in re.findall(r"\b\d{1,3}(?:,\d{3})\b", match.group(0))]
+        if numbers:
+            return numbers[-1], "Q1 2026 sales evolution / Group revenue table: 2026 Q1 at current FX"
+
+    rounded = re.search(r"Group revenue amounted to\s+€\s*([0-9]+(?:\.[0-9]+)?)\s+billion", text, flags=re.I)
+    if rounded:
+        return float(rounded.group(1)) * 1000, "Financial information for the three months ended March 31, 2026: Group revenue amounted to EUR billions"
+    return None
+
+
+def official_quarterly_fallback_company_json(
+    batch_dir: Path,
+    company: dict,
+    manifest_company: dict,
+    period_label: str,
+    period_end: str | None,
+    raw_values: dict[str, tuple[float | None, dict | None, str | None]],
+    notes: list[str],
+) -> dict | None:
+    if company.get("key") != "michelin":
+        return None
+
+    official_texts: list[tuple[dict, str]] = []
+    for source in manifest_company.get("sources", []):
+        if source.get("type") == "readable_aggregator_fallback":
+            continue
+        text = text_from_source(batch_dir, source)
+        if text:
+            official_texts.append((source, text))
+    if not official_texts:
+        return None
+
+    selected_period: tuple[str, str] | None = None
+    revenue_fact: tuple[float, dict, str] | None = None
+    for source, text in official_texts:
+        selected_period = selected_period or parse_michelin_quarterly_period(text)
+        parsed_revenue = parse_michelin_quarterly_revenue(text)
+        if parsed_revenue:
+            value, label = parsed_revenue
+            revenue_fact = (value, source, label)
+            if "sales evolution" in label:
+                break
+    if not selected_period or not revenue_fact:
+        return None
+
+    fallback_raw_values = {metric: (None, None, None) for metric in METRICS}
+    value, source, row_label = revenue_fact
+    fallback_raw_values["Total Revenues"] = (value, source, row_label)
+
+    employee_value, employee_source, employee_label = raw_values.get("# employees", (None, None, None))
+    if employee_value is not None:
+        fallback_raw_values["# employees"] = (employee_value, employee_source, employee_label)
+
+    facts = []
+    for metric in METRICS:
+        fact_value, fact_source, fact_label = fallback_raw_values.get(metric, (None, None, None))
+        facts.append(fact_from_stockanalysis(metric, fact_value, fact_source, fact_label))
+
+    official_notes = [
+        *notes,
+        (
+            f"StockAnalysis selected `{period_label}` ({period_end or 'no period_end'}), which is not a standalone "
+            "quarter. Used official Michelin Q1 material only for explicitly available quarterly facts."
+        ),
+        "Unavailable standalone quarterly metrics remain review_required instead of using H1/H2 values.",
+    ]
+    return {
+        "company_key": company.get("key"),
+        "company_name": company.get("display_name"),
+        "period_label": selected_period[0],
+        "period_start": None,
+        "period_end": selected_period[1],
+        "currency": company.get("currency"),
+        "unit": "millions",
+        "facts": facts,
+        "company_review_notes": official_notes,
+    }
+
+
+def stockanalysis_lookup(table: pd.DataFrame, labels: list[str]) -> tuple[float | None, str | None]:
+    first_col = table.columns[0]
+    latest_col = table.columns[1]
+    label_map = {str(row[first_col]).strip(): row[latest_col] for _, row in table.iterrows()}
+    normalized_map = {normalize_label(label): (label, value) for label, value in label_map.items()}
+    for label in labels:
+        exact = label_map.get(label)
+        if exact is not None:
+            return parse_stockanalysis_number(exact), label
+        normalized = normalized_map.get(normalize_label(label))
+        if normalized:
+            actual_label, actual_value = normalized
+            return parse_stockanalysis_number(actual_value), actual_label
+    return None, None
+
+
+def fact_from_stockanalysis(
+    metric: str,
+    value: float | None,
+    source: dict | None,
+    row_label: str | None,
+    computed_label: str | None = None,
+) -> dict:
+    has_value = value is not None
+    source_file = None
+    if source:
+        source_file = Path(source.get("ai_studio_upload_file") or source.get("downloaded_file") or "").name or None
+    evidence = computed_label or (f"{row_label}: {value}" if row_label and has_value else None)
+    return {
+        "metric": metric,
+        "value": value,
+        "source_file": source_file,
+        "source_url": (source or {}).get("final_url") or (source or {}).get("url"),
+        "source_type": (source or {}).get("type") or "readable_aggregator_fallback",
+        "page": None,
+        "table_label": computed_label or row_label,
+        "evidence_quote": evidence,
+        "confidence": "high" if has_value else "low",
+        "review_required": not has_value,
+        "review_reason": None if has_value else "Metric not found in the latest StockAnalysis statement table.",
+    }
+
+
+def build_stockanalysis_company_json(batch_dir: Path, company: dict, mode: str) -> dict | None:
+    statement_tables: dict[str, pd.DataFrame] = {}
+    statement_sources: dict[str, dict] = {}
+    period_labels: list[str] = []
+    period_ends: list[str] = []
+    employee_sources: list[tuple[dict, Path]] = []
+    notes: list[str] = []
+
+    for source in company.get("sources", []):
+        statement = source.get("stockanalysis_statement")
+        if not statement:
+            continue
+        downloaded_file = source.get("downloaded_file")
+        if not downloaded_file:
+            notes.append(f"{statement}: source was not downloaded.")
+            continue
+        source_path = batch_dir / downloaded_file
+        if statement == "employees":
+            employee_sources.append((source, source_path))
+            continue
+        try:
+            table, period_label, period_end = stockanalysis_table_from_source(source_path, mode)
+        except Exception as exc:  # noqa: BLE001 - record in generated JSON notes.
+            notes.append(f"{statement}: failed to parse StockAnalysis table: {exc}")
+            continue
+        statement_tables[statement] = table
+        statement_sources[statement] = source
+        if period_label:
+            period_labels.append(period_label)
+        if period_end:
+            period_ends.append(period_end)
+
+    if not statement_tables:
+        return None
+
+    period_label = period_labels[0] if period_labels else ""
+    period_end = period_ends[0] if period_ends else None
+    mismatched_labels = sorted(set(period_labels))
+    mismatched_ends = sorted(set(period_ends))
+    if len(mismatched_labels) > 1 or len(mismatched_ends) > 1:
+        notes.append(
+            "StockAnalysis statements disagree on latest period: "
+            f"labels={mismatched_labels}, period_ends={mismatched_ends}."
+        )
+
+    raw_values: dict[str, tuple[float | None, dict | None, str | None]] = {}
+    for metric, candidates in STOCKANALYSIS_ROW_MAP.items():
+        raw_values[metric] = (None, None, None)
+        for statement, row_label in candidates:
+            table = statement_tables.get(statement)
+            if table is None:
+                continue
+            value, actual_label = stockanalysis_lookup(table, [row_label])
+            if value is not None:
+                raw_values[metric] = (value, statement_sources.get(statement), actual_label)
+                break
+
+    if employee_sources:
+        raw_values["# employees"] = (None, None, None)
+        for source, source_path in employee_sources:
+            try:
+                value, employee_label = stockanalysis_employees_from_source(source_path, mode, period_end)
+            except Exception as exc:  # noqa: BLE001 - record in generated JSON notes.
+                notes.append(f"employees: failed to parse StockAnalysis employee table: {exc}")
+                continue
+            if value is not None:
+                raw_values["# employees"] = (value, source, employee_label)
+                break
+
+    if mode == "quarterly" and period_label_has_quarterly_issue(period_label):
+        official_fallback = official_quarterly_fallback_company_json(
+            batch_dir,
+            company,
+            company,
+            period_label,
+            period_end,
+            raw_values,
+            notes,
+        )
+        if official_fallback:
+            return official_fallback
+
+    revenue = raw_values.get("Total Revenues", (None, None, None))[0]
+    gross_profit = raw_values.get("Gross Profit", (None, None, None))[0]
+    operating_income = raw_values.get("Operating Income", (None, None, None))[0]
+    ebitda = raw_values.get("EBITDA", (None, None, None))[0]
+    if revenue:
+        income_source = statement_sources.get("income_statement")
+        raw_values["Gross Profit Margin %"] = (
+            round(gross_profit / revenue, 6) if gross_profit is not None else None,
+            income_source,
+            "computed: Gross Profit / Revenue",
+        )
+        raw_values["EBIT Margin %"] = (
+            round(operating_income / revenue, 6) if operating_income is not None else None,
+            income_source,
+            "computed: Operating Income / Revenue",
+        )
+        raw_values["EBITDA Margin %"] = (
+            round(ebitda / revenue, 6) if ebitda is not None else None,
+            income_source,
+            "computed: EBITDA / Revenue",
+        )
+
+    facts = []
+    for metric in METRICS:
+        value, source, row_label = raw_values.get(metric, (None, None, None))
+        computed_label = row_label if row_label and row_label.startswith("computed:") else None
+        facts.append(fact_from_stockanalysis(metric, value, source, row_label, computed_label))
+
+    return {
+        "company_key": company.get("key"),
+        "company_name": company.get("display_name"),
+        "period_label": period_label,
+        "period_start": None,
+        "period_end": period_end,
+        "currency": company.get("currency"),
+        "unit": "millions",
+        "facts": facts,
+        "company_review_notes": notes
+        + [
+            "Diagnostic draft from freshly downloaded StockAnalysis statement tables.",
+            "Do not treat this draft as the final dashboard JSON unless it is reviewed or replaced by an LLM extraction.",
+        ],
+    }
+
+
+def write_stockanalysis_auto_json(output_dir: Path, batch_dir: Path, batch_manifest: dict, mode: str) -> None:
+    companies = []
+    for company in batch_manifest.get("companies", []):
+        company_json = build_stockanalysis_company_json(batch_dir, company, mode)
+        if company_json:
+            companies.append(company_json)
+    if not companies:
+        return
+    json_dir = output_dir / "stockanalysis_auto_json"
+    json_dir.mkdir(exist_ok=True)
+    payload = {
+        "companies": companies,
+        "auto_generated": {
+            "source": "stockanalysis_direct_parser_draft",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "mode": mode,
+            "batch_id": batch_manifest.get("batch_id"),
+        },
+    }
+    (json_dir / f"{batch_manifest['batch_id']}.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 SEC_RELEVANT_TAGS = {
@@ -351,15 +940,123 @@ def slim_sec_company_facts(payload: bytes, max_facts_per_unit: int = 16) -> dict
     }
 
 
+def discover_michelin_quarterly_pdf_sources(source: dict, payload: bytes, final_url: str, mode: str) -> list[dict]:
+    if mode != "quarterly" or "michelin.com" not in final_url.lower():
+        return []
+    html_text = payload.decode("utf-8", "ignore")
+    discovered: list[dict] = []
+    seen: set[str] = set()
+    for tag_match in re.finditer(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>", html_text, flags=re.I | re.S):
+        href = html.unescape(tag_match.group(1))
+        tag_text = html.unescape(tag_match.group(0))
+        haystack = f"{href} {tag_text}".lower()
+        if ".pdf" not in haystack or "invitation" in haystack:
+            continue
+        is_q1_material = any(
+            marker in haystack
+            for marker in (
+                "1st-quarter",
+                "first-quarter",
+                "first quarter",
+                "march-31-2026",
+                "march 31 2026",
+            )
+        )
+        if not is_q1_material:
+            continue
+        url = urljoin(final_url, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        discovered.append(
+            {
+                "type": "official_pdf",
+                "url": url,
+                "note": "Official Michelin Q1 PDF discovered from the results and sales page for standalone quarterly review.",
+            }
+        )
+        if len(discovered) >= 1:
+            break
+    return discovered
+
+
+def materialize_source(
+    source: dict,
+    batch_dir: Path,
+    sources_dir: Path,
+    company_key: str,
+    source_index: int,
+) -> tuple[dict, bytes | None]:
+    source_entry = dict(source)
+    try:
+        payload, content_type, final_url = fetch_url(source["url"])
+        filename = source_filename(company_key, source_index, final_url, content_type)
+        file_path = sources_dir / filename
+        file_path.write_bytes(payload)
+        source_entry.update(
+            {
+                "download_status": "downloaded",
+                "downloaded_file": str(file_path.relative_to(batch_dir)),
+                "content_type": content_type,
+                "final_url": final_url,
+                "bytes": len(payload),
+            }
+        )
+        if "html" in content_type.lower() or filename.endswith(".html"):
+            text_path = file_path.with_suffix(".txt")
+            text_path.write_text(html_to_text(payload.decode("utf-8", "ignore"))[:200000], encoding="utf-8")
+            source_entry["text_extract_file"] = str(text_path.relative_to(batch_dir))
+            source_entry["ai_studio_upload_file"] = str(text_path.relative_to(batch_dir))
+        if "pdf" in content_type.lower() or filename.endswith(".pdf"):
+            text_path = file_path.with_suffix(".txt")
+            text_path.write_text(pdf_to_text(file_path), encoding="utf-8")
+            source_entry["text_extract_file"] = str(text_path.relative_to(batch_dir))
+            source_entry["ai_studio_upload_file"] = str(text_path.relative_to(batch_dir))
+            source_entry["ai_studio_upload_note"] = (
+                "Upload this compact text extract instead of the raw PDF for manual LLM review."
+            )
+        if filename.endswith(".xlsx"):
+            text_path = file_path.with_suffix(".txt")
+            text_path.write_text(xlsx_to_text(file_path), encoding="utf-8")
+            source_entry["text_extract_file"] = str(text_path.relative_to(batch_dir))
+            source_entry["ai_studio_upload_file"] = str(text_path.relative_to(batch_dir))
+            source_entry["ai_studio_upload_note"] = (
+                "Some provider web UIs may reject XLSX files. Upload this text_extract_file instead."
+            )
+        if source.get("type") == "official_api" and "data.sec.gov/api/xbrl/companyfacts" in final_url:
+            slim_path = file_path.with_name(f"{file_path.stem}_slim.json")
+            slim_path.write_text(
+                json.dumps(slim_sec_company_facts(payload), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            source_entry["slim_extract_file"] = str(slim_path.relative_to(batch_dir))
+            source_entry["ai_studio_upload_file"] = str(slim_path.relative_to(batch_dir))
+            source_entry["ai_studio_upload_note"] = (
+                "Upload this compact SEC extract instead of the full Company Facts JSON."
+            )
+        time.sleep(0.5)
+        return source_entry, payload
+    except Exception as exc:  # noqa: BLE001 - record for user/AI Studio
+        source_entry.update({"download_status": "failed", "error": str(exc)})
+        return source_entry, None
+
+
+def llm_upload_file_for_source(source: dict) -> str | None:
+    if source.get("llm_upload_skip"):
+        return None
+    upload_file = source.get("ai_studio_upload_file")
+    if not upload_file and source.get("downloaded_file", "").endswith(".xlsx"):
+        upload_file = source.get("text_extract_file")
+    if not upload_file:
+        upload_file = source.get("downloaded_file")
+    return upload_file or None
+
+
 def upload_files_for_batch(batch_manifest: dict) -> list[str]:
     files: list[str] = []
     for company in batch_manifest["companies"]:
         for source in company["sources"]:
-            upload_file = source.get("ai_studio_upload_file")
-            if not upload_file and source.get("downloaded_file", "").endswith(".xlsx"):
-                upload_file = source.get("text_extract_file")
-            if not upload_file:
-                upload_file = source.get("downloaded_file")
+            upload_file = llm_upload_file_for_source(source)
             if upload_file:
                 files.append(upload_file)
     return files
@@ -368,11 +1065,7 @@ def upload_files_for_batch(batch_manifest: dict) -> list[str]:
 def upload_files_for_company(company_manifest: dict) -> list[str]:
     files: list[str] = []
     for source in company_manifest.get("sources", []):
-        upload_file = source.get("ai_studio_upload_file")
-        if not upload_file and source.get("downloaded_file", "").endswith(".xlsx"):
-            upload_file = source.get("text_extract_file")
-        if not upload_file:
-            upload_file = source.get("downloaded_file")
+        upload_file = llm_upload_file_for_source(source)
         if upload_file:
             files.append(upload_file)
     return files
@@ -380,10 +1073,7 @@ def upload_files_for_company(company_manifest: dict) -> list[str]:
 
 def estimated_upload_files_for_company(company: dict, mode: str, download_mode: str) -> int:
     count = 0
-    for source in company.get("sources", []):
-        mode_source = source_for_mode(source, mode)
-        if mode_source is None:
-            continue
+    for mode_source in selected_sources_for_company(company, mode):
         if download_mode == "fast" and mode_source.get("type") not in FAST_DOWNLOAD_TYPES:
             continue
         count += 1
@@ -406,14 +1096,20 @@ def compact_source_manifest(batch_manifest: dict) -> dict:
             "sources": [],
         }
         for source in company.get("sources", []):
-            upload_file = source.get("ai_studio_upload_file") or source.get("downloaded_file")
+            upload_file = llm_upload_file_for_source(source)
+            note = source.get("note") or source.get("ai_studio_upload_note") or source.get("note_for_user")
+            if is_deterministic_stockanalysis_source(source):
+                note_prefix = f"{note} " if note else ""
+                note = (
+                    f"{note_prefix}Primary LLM upload source for standard benchmark metrics."
+                ).strip()
             compact_company["sources"].append(
                 {
                     "source_type": source.get("type"),
                     "upload_file": Path(upload_file).name if upload_file else None,
                     "source_url": source.get("final_url") or source.get("url"),
                     "download_status": source.get("download_status"),
-                    "note": source.get("note") or source.get("ai_studio_upload_note") or source.get("note_for_user"),
+                    "note": note,
                 }
             )
         compact["companies"].append(compact_company)
@@ -424,8 +1120,9 @@ def write_upload_list(batch_dir: Path, batch_manifest: dict) -> None:
     files = upload_files_for_batch(batch_manifest)
     lines = [
         "# Upload exactly these source files to Qwen Studio or the selected provider for this batch.",
+        "# StockAnalysis files are the primary sources. Official files appear only as fallback when StockAnalysis is missing the target period or company.",
         "# Do not upload aistudio_latest_quarter_schema.json or source_manifest.json; the prompt already includes them.",
-        "# Do not upload raw .xlsx files or full SEC Company Facts JSON when an extract is listed.",
+        "# Do not upload raw .xlsx/PDF files or full SEC Company Facts JSON when an extract is listed.",
         "",
         *files,
         "",
@@ -543,11 +1240,7 @@ def prepare_batch(
             "period_target": period_hint_for_mode(mode),
             "sources": [],
         }
-        mode_sources = [
-            mode_source
-            for source in company.get("sources", [])
-            if (mode_source := source_for_mode(source, mode)) is not None
-        ]
+        mode_sources = selected_sources_for_company(company, mode)
         for i, source in enumerate(mode_sources, start=1):
             source_entry = dict(source)
             if download_mode == "fast" and source.get("type") not in FAST_DOWNLOAD_TYPES:
@@ -559,48 +1252,31 @@ def prepare_batch(
                 )
                 company_entry["sources"].append(source_entry)
                 continue
-            try:
-                payload, content_type, final_url = fetch_url(source["url"])
-                filename = source_filename(company["key"], i, final_url, content_type)
-                file_path = sources_dir / filename
-                file_path.write_bytes(payload)
-                source_entry.update(
-                    {
-                        "download_status": "downloaded",
-                        "downloaded_file": str(file_path.relative_to(batch_dir)),
-                        "content_type": content_type,
-                        "final_url": final_url,
-                        "bytes": len(payload),
-                    }
-                )
-                if "html" in content_type.lower() or filename.endswith(".html"):
-                    text_path = file_path.with_suffix(".txt")
-                    text_path.write_text(html_to_text(payload.decode("utf-8", "ignore"))[:200000], encoding="utf-8")
-                    source_entry["text_extract_file"] = str(text_path.relative_to(batch_dir))
-                    source_entry["ai_studio_upload_file"] = str(text_path.relative_to(batch_dir))
-                if filename.endswith(".xlsx"):
-                    text_path = file_path.with_suffix(".txt")
-                    text_path.write_text(xlsx_to_text(file_path), encoding="utf-8")
-                    source_entry["text_extract_file"] = str(text_path.relative_to(batch_dir))
-                    source_entry["ai_studio_upload_file"] = str(text_path.relative_to(batch_dir))
-                    source_entry["ai_studio_upload_note"] = (
-                        "Some provider web UIs may reject XLSX files. Upload this text_extract_file instead."
-                    )
-                if source.get("type") == "official_api" and "data.sec.gov/api/xbrl/companyfacts" in final_url:
-                    slim_path = file_path.with_name(f"{file_path.stem}_slim.json")
-                    slim_path.write_text(
-                        json.dumps(slim_sec_company_facts(payload), ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                    source_entry["slim_extract_file"] = str(slim_path.relative_to(batch_dir))
-                    source_entry["ai_studio_upload_file"] = str(slim_path.relative_to(batch_dir))
-                    source_entry["ai_studio_upload_note"] = (
-                        "Upload this compact SEC extract instead of the full Company Facts JSON."
-                    )
-                time.sleep(0.5)
-            except Exception as exc:  # noqa: BLE001 - record for user/AI Studio
-                source_entry.update({"download_status": "failed", "error": str(exc)})
+            source_entry, payload = materialize_source(source, batch_dir, sources_dir, company["key"], i)
             company_entry["sources"].append(source_entry)
+            if payload and source_entry.get("content_type") and "html" in str(source_entry["content_type"]).lower():
+                discovered_sources = discover_michelin_quarterly_pdf_sources(
+                    source_entry,
+                    payload,
+                    str(source_entry.get("final_url") or source_entry.get("url")),
+                    mode,
+                )
+                if discovered_sources and source_entry.get("type") == "official_ir_page":
+                    source_entry["llm_upload_skip"] = True
+                    source_entry["ai_studio_upload_file"] = None
+                    source_entry["ai_studio_upload_note"] = (
+                        "Discovery page used to find the latest official PDF; do not upload it when the PDF is listed."
+                    )
+                for discovered_source in discovered_sources:
+                    discovered_index = len(company_entry["sources"]) + 1
+                    discovered_entry, _ = materialize_source(
+                        discovered_source,
+                        batch_dir,
+                        sources_dir,
+                        company["key"],
+                        discovered_index,
+                    )
+                    company_entry["sources"].append(discovered_entry)
         batch_manifest["companies"].append(company_entry)
 
     write_manifest(batch_dir, batch_manifest)
@@ -644,6 +1320,7 @@ def prepare_batch(
             "oversize_companies": oversize_companies,
         }
     write_manifest(batch_dir, batch_manifest)
+    write_stockanalysis_auto_json(output_dir, batch_dir, batch_manifest, mode)
     return batch_manifest
 
 
@@ -831,13 +1508,15 @@ def write_instructions(output_dir: Path, batch_manifests: list[dict], mode: str,
         "",
         upload_limit_text,
         "",
-        "Use this package manually in the provider selected in the dashboard.",
+        "StockAnalysis files are the primary uploaded source for standard income statement, balance sheet, cash-flow, and employee rows.",
+        "Official/company files are included only when StockAnalysis is unavailable or does not expose the required target period.",
+        "A diagnostic local parser draft may exist in `stockanalysis_auto_json/`, but final dashboard input belongs in `aistudio_json/` after LLM review.",
         "",
         "1. Open one batch folder.",
         "2. In the provider web UI, turn off web search / grounding for this extraction run if that option is enabled.",
         "3. Open `FILES_FOR_AI_STUDIO` and upload every file in that folder.",
-        "   That folder contains only source attachments for the selected model.",
-        "   It already replaces raw `.xlsx` files and oversized SEC JSON files with upload-friendly extracts.",
+        "   That folder contains only the source attachments for the selected model.",
+        "   It already replaces raw `.xlsx`, `.pdf`, and oversized SEC JSON files with upload-friendly extracts.",
         "   Do not upload `source_manifest.json`, the schema JSON, or `FILES_TO_UPLOAD.txt`; the prompt already includes the needed structure.",
         "   If some sources are marked `skipped_fast_mode` or `failed`, the prompt still contains their URLs. The model can use them as references, or you can manually download/upload those files later.",
         "4. Copy-paste `prompt_for_aistudio.txt` into the provider web UI.",

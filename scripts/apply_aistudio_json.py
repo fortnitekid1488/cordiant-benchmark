@@ -28,6 +28,7 @@ OUTPUT_MAX_ROW = 59
 OUTPUT_MAX_COL = 31
 MIN_VISIBLE_COMPANY_COL_WIDTH = 11.5
 EXCEL_ERROR_CODES = {"#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!"}
+PERCENT_ROWS = {9, 15, 17, 25, 27, 38, 41, 43, 46, 49, 57, 59}
 DEFAULT_LC_USD_RATES = {
     "eu": 1.1306,
     "us": 1.0,
@@ -48,15 +49,19 @@ INTERIM_PERIOD_RE = re.compile(r"\binterim\b", re.I)
 ANNUAL_PERIOD_RE = re.compile(r"\b(fy|full[-\s]?year|annual)\b|year\s+ended|12\s+months|twelve\s+months", re.I)
 METRICS = [
     "Total Revenues",
+    "# employees",
     "Cost Of Revenues",
     "Gross Profit",
     "Gross Profit Margin %",
+    "Other Operating Expenses, Total",
+    "R&D Expenses",
     "Selling General & Admin Expenses",
     "Other Operating Expenses",
     "Operating Income",
     "EBIT Margin %",
     "EBITDA",
     "EBITDA Margin %",
+    "Total Receivables",
     "Net Income",
     "Accounts Receivable, Total",
     "Inventory",
@@ -71,15 +76,19 @@ METRICS = [
 
 TOP_METRIC_ROWS = {
     "Total Revenues": 4,
+    "# employees": 5,
     "Cost Of Revenues": 7,
     "Gross Profit": 8,
     "Gross Profit Margin %": 9,
+    "Other Operating Expenses, Total": 10,
+    "R&D Expenses": 11,
     "Selling General & Admin Expenses": 12,
     "Other Operating Expenses": 13,
     "Operating Income": 14,
     "EBIT Margin %": 15,
     "EBITDA": 16,
     "EBITDA Margin %": 17,
+    "Total Receivables": 18,
     "Accounts Receivable, Total": 19,
     "Inventory": 21,
     "Total Debt": 23,
@@ -324,6 +333,10 @@ def copy_summary_sheet(workbook_path: Path):
             if src_cell.hyperlink:
                 dst_cell._hyperlink = copy.copy(src_cell.hyperlink)
 
+    for row in PERCENT_ROWS:
+        for col in range(4, 19):
+            ws.cell(row, col).number_format = "0%"
+
     return output_wb, ws
 
 
@@ -401,10 +414,13 @@ def recalc_company_column(ws, col: int) -> None:
         34: converted_to_usd(ws, 4, col),
         36: converted_to_usd(ws, 7, col),
         37: converted_to_usd(ws, 8, col),
+        39: converted_to_usd(ws, 10, col),
+        40: converted_to_usd(ws, 11, col),
         42: converted_to_usd(ws, 12, col),
         44: converted_to_usd(ws, 13, col),
         45: converted_to_usd(ws, 14, col),
         47: converted_to_usd(ws, 16, col),
+        50: converted_to_usd(ws, 18, col),
         51: converted_to_usd(ws, 19, col),
         53: converted_to_usd(ws, 21, col),
         55: converted_to_usd(ws, 23, col),
@@ -417,6 +433,7 @@ def recalc_company_column(ws, col: int) -> None:
 
     revenue_usd = cell_number(ws, 34, col)
     gross_profit_usd = cell_number(ws, 37, col)
+    research_development_usd = cell_number(ws, 40, col)
     sga = cell_number(ws, 12, col)
     operating_income_usd = cell_number(ws, 45, col)
     ebitda_usd = cell_number(ws, 47, col)
@@ -427,6 +444,7 @@ def recalc_company_column(ws, col: int) -> None:
 
     set_if_number(ws, 35, col, safe_div(revenue_usd * 1000 if revenue_usd is not None else None, employees), ws.cell(35, col).value)
     set_if_number(ws, 38, col, safe_div(gross_profit_usd, revenue_usd), ws.cell(38, col).value)
+    set_if_number(ws, 41, col, safe_div(research_development_usd, revenue_usd), ws.cell(41, col).value)
     set_if_number(ws, 43, col, safe_div(sga, revenue), ws.cell(43, col).value)
     set_if_number(ws, 46, col, safe_div(operating_income_usd, revenue_usd), ws.cell(46, col).value)
     set_if_number(ws, 48, col, safe_div(ebitda_usd * 1000 if ebitda_usd is not None else None, employees), ws.cell(48, col).value)
@@ -650,6 +668,7 @@ def main() -> int:
     output_workbook = out_dir / f"{args.workbook.stem}_{suffix}_{run_id}.xlsx"
 
     wb, ws = copy_summary_sheet(args.workbook)
+    apply_audit = apply_companies_to_summary(ws, companies, args.mode)
     audit = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "mode": args.mode,
@@ -659,7 +678,7 @@ def main() -> int:
         "output_range": f"A1:{get_column_letter(OUTPUT_MAX_COL)}{OUTPUT_MAX_ROW}",
         "one_sheet_workbook": True,
         "companies_in_json": len(companies),
-        **apply_companies_to_summary(ws, companies, args.mode),
+        **apply_audit,
     }
     set_initial_sheet(wb, SUMMARY_SHEET)
     wb.save(output_workbook)

@@ -150,6 +150,11 @@
       "preferred_period": "latest reported period for selected mode",
       "sources": [
         {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/stocks/gt/financials/?p=quarterly",
+          "note": "Primary StockAnalysis fallback for standardized company financial statements."
+        },
+        {
           "type": "official_api",
           "url": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000042582.json",
           "note": "SEC Company Facts JSON. Preferred structured source."
@@ -168,6 +173,11 @@
       "currency": "JPY",
       "preferred_period": "latest reported period for selected mode",
       "sources": [
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/tyo/5108/financials/?p=quarterly",
+          "note": "Primary StockAnalysis fallback for standardized company financial statements."
+        },
         {
           "type": "official_ir_page",
           "url": "https://www.bridgestone.com/ir/library/result/",
@@ -211,6 +221,11 @@
       "currency": "JPY",
       "preferred_period": "latest reported period for selected mode",
       "sources": [
+        {
+          "type": "readable_aggregator_fallback",
+          "url": "https://stockanalysis.com/quote/tyo/5110/financials/?p=quarterly",
+          "note": "Primary StockAnalysis fallback for standardized company financial statements."
+        },
         {
           "type": "official_ir_page",
           "url": "https://www.srigroup.co.jp/english/ir/library/financial-report/",

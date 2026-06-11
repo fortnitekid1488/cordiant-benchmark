@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import errno
 import json
 import os
@@ -32,16 +33,19 @@ MODE_CONFIG = {
         "label": "Квартал",
         "prepare_args": ["scripts/prepare_aistudio_sources.py", "--mode", "quarterly", "--download-mode", "full"],
         "apply_args": ["scripts/apply_aistudio_json.py", "--mode", "quarterly"],
-        "symlink": ROOT / "OPEN_THIS_QUARTERLY_PACKAGE",
         "latest_file": ROOT / "outputs" / "latest_aistudio_quarterly_package_path.txt",
     },
     "annual": {
         "label": "Год",
         "prepare_args": ["scripts/prepare_aistudio_sources.py", "--mode", "annual", "--download-mode", "full"],
         "apply_args": ["scripts/apply_aistudio_json.py", "--mode", "annual"],
-        "symlink": ROOT / "OPEN_THIS_ANNUAL_PACKAGE",
         "latest_file": ROOT / "outputs" / "latest_aistudio_annual_package_path.txt",
     },
+}
+
+LEGACY_ROOT_PACKAGE_POINTERS = {
+    "quarterly": [ROOT / "OPEN_THIS_QUARTERLY_PACKAGE"],
+    "annual": [ROOT / "OPEN_THIS_ANNUAL_PACKAGE", ROOT / "OPEN_THIS_ANNUAL_TRAINING_PACKAGE"],
 }
 
 PREPARE_LOCK = threading.RLock()
@@ -76,30 +80,16 @@ def package_path(mode: str, provider: str | None = None) -> Path | None:
         provider_path = read_path_pointer(latest_file_for_provider(mode, provider))
         if provider_path:
             return provider_path
-    package_link = config["symlink"]
-    if package_link.exists() and package_link.is_dir():
-        return package_link.resolve()
     return read_path_pointer(config["latest_file"])
 
 
 def update_package_pointer(mode: str, target: Path) -> None:
-    """Create the convenient package pointer when the OS allows it.
-
-    macOS accepts this as a normal symlink. Windows often requires Developer
-    Mode or admin rights for directory symlinks, so failure is non-fatal; the
-    canonical latest-package text file written by the preparer remains the
-    cross-platform source of truth.
-    """
-    package_link = MODE_CONFIG[mode]["symlink"]
-    pointer_file = package_link.with_suffix(".txt")
-    if package_link.is_symlink() or package_link.is_file():
-        package_link.unlink()
-    if not package_link.exists():
-        try:
-            package_link.symlink_to(target, target_is_directory=True)
-        except OSError:
-            pass
-    pointer_file.write_text(str(target), encoding="utf-8")
+    """Keep root clean; package pointers live under outputs/latest_* files."""
+    _ = target
+    for legacy_path in LEGACY_ROOT_PACKAGE_POINTERS.get(mode, []):
+        for path in (legacy_path, legacy_path.with_suffix(".txt")):
+            if path.is_symlink() or path.is_file():
+                path.unlink()
 
 
 def copy_text_to_clipboard(text: str) -> None:
@@ -147,7 +137,7 @@ def reveal_path(path: Path) -> None:
         if target.is_dir():
             os.startfile(str(target))  # type: ignore[attr-defined]
         else:
-            subprocess.run(["explorer", f"/select,{target}"], check=False)
+            subprocess.run(["explorer", f'/select,"{target}"'], check=False)
     else:
         open_path(target if target.is_dir() else target.parent)
 
@@ -585,6 +575,87 @@ def validate_payload_matches_batch(batch_dir: Path, payload: dict[str, Any]) -> 
         )
 
 
+def manual_fact_should_replace(existing: dict[str, Any] | None, manual: dict[str, Any]) -> bool:
+    if manual.get("value") is not None:
+        return True
+    if existing is None:
+        return True
+    return existing.get("value") is None and bool(manual.get("review_required"))
+
+
+def merge_company_overlay(existing: dict[str, Any], manual: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(existing)
+    existing_facts = [
+        fact
+        for fact in merged.get("facts", [])
+        if isinstance(fact, dict) and fact.get("metric")
+    ]
+    facts_by_metric = {fact["metric"]: fact for fact in existing_facts}
+    fact_order = [fact["metric"] for fact in existing_facts]
+    manual_has_values = False
+
+    for manual_fact in manual.get("facts", []):
+        if not isinstance(manual_fact, dict) or not manual_fact.get("metric"):
+            continue
+        metric = manual_fact["metric"]
+        if manual_fact.get("value") is not None:
+            manual_has_values = True
+        if manual_fact_should_replace(facts_by_metric.get(metric), manual_fact):
+            facts_by_metric[metric] = copy.deepcopy(manual_fact)
+            if metric not in fact_order:
+                fact_order.append(metric)
+
+    merged["facts"] = [facts_by_metric[metric] for metric in fact_order if metric in facts_by_metric]
+    if manual_has_values:
+        for key in ("period_label", "period_start", "period_end", "currency", "unit"):
+            if manual.get(key) not in (None, ""):
+                merged[key] = manual[key]
+
+    notes = list(merged.get("company_review_notes") or [])
+    for note in manual.get("company_review_notes") or []:
+        if note not in notes:
+            notes.append(note)
+    if manual.get("facts"):
+        overlay_note = "Manual LLM overlay merged over existing batch JSON."
+        if overlay_note not in notes:
+            notes.append(overlay_note)
+    merged["company_review_notes"] = notes
+    return merged
+
+
+def merge_manual_payload(existing_payload: dict[str, Any] | None, manual_payload: dict[str, Any]) -> dict[str, Any]:
+    if not existing_payload or not isinstance(existing_payload.get("companies"), list):
+        return manual_payload
+
+    merged_payload = copy.deepcopy(existing_payload)
+    companies = [company for company in merged_payload.get("companies", []) if isinstance(company, dict)]
+    merged_payload["companies"] = companies
+    index: dict[str, dict[str, Any]] = {}
+    for company in companies:
+        for identity in company_identity_values(company):
+            index.setdefault(identity, company)
+
+    for manual_company in manual_payload.get("companies", []):
+        if not isinstance(manual_company, dict):
+            continue
+        target = next((index[identity] for identity in company_identity_values(manual_company) if identity in index), None)
+        if target is None:
+            copied = copy.deepcopy(manual_company)
+            companies.append(copied)
+            for identity in company_identity_values(copied):
+                index.setdefault(identity, copied)
+            continue
+        merged_company = merge_company_overlay(target, manual_company)
+        target.clear()
+        target.update(merged_company)
+
+    merged_payload["manual_overlay"] = {
+        "saved_at": iso_now(),
+        "note": "Manual provider response was merged over existing batch JSON; null manual facts do not erase existing non-null values.",
+    }
+    return merged_payload
+
+
 def extract_json_payload(text: str) -> Any:
     stripped = clean_aistudio_text(text)
     if not stripped:
@@ -789,12 +860,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 json_dir = package / "aistudio_json"
                 json_dir.mkdir(exist_ok=True)
                 json_path = json_dir / f"{batch_dir.name}.json"
-                json_path.write_text(json.dumps(parsed_json, ensure_ascii=False, indent=2), encoding="utf-8")
+                saved_json = merge_manual_payload(read_json(json_path), parsed_json)
+                json_path.write_text(json.dumps(saved_json, ensure_ascii=False, indent=2), encoding="utf-8")
                 return self.send_json(
                     {
                         "ok": True,
                         "json_path": str(json_path),
-                        "summary": summarize_payload(parsed_json),
+                        "summary": summarize_payload(saved_json),
                         **status_payload(provider),
                     }
                 )

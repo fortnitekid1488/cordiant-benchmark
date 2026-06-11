@@ -380,13 +380,14 @@ function renderBatchList({ preparing, batches }) {
     const review = batch.json_summary ? ` · review ${batch.json_summary.review}` : "";
     const saved = batch.json_saved ? "JSON сохранён" : "нет JSON";
     const limitText = batch.provider_limit ? ` / лимит ${batch.provider_limit}` : "";
+    const fileText = batch.upload_count ? `${batch.upload_count}${limitText} файлов` : "LLM-файлов нет";
     item.innerHTML = `
       <span class="batch-topline">
         <strong>${escapeHtml(batch.id)}</strong>
         <em class="${batch.json_saved ? "saved" : "pending"}">${saved}</em>
       </span>
       <span class="batch-companies">${escapeHtml((batch.companies || []).join(", "))}</span>
-      <small>${batch.upload_count || 0}${limitText} файлов · ${batch.downloaded_sources || 0} источников${review}</small>
+      <small>${fileText} · ${batch.downloaded_sources || 0} источников${review}</small>
     `;
     item.addEventListener("click", () => selectBatch(batch.id));
     fragment.append(item);
@@ -422,8 +423,9 @@ function renderBatchDetail() {
   const providerLimitText = batch.provider_limit
     ? ` · лимит ${batch.provider_limit} файлов`
     : "";
+  const fileText = batch.upload_count ? `${batch.upload_count} файлов${providerLimitText}` : "LLM-файлов нет";
   el.batchTitle.textContent = batch.id;
-  el.batchMeta.textContent = `${(batch.companies || []).join(", ")} · ${batch.upload_count || 0} файлов${providerLimitText} · ${batch.prompt_chars || 0} знаков промпта${summaryText}`;
+  el.batchMeta.textContent = `${(batch.companies || []).join(", ")} · ${fileText} · ${batch.prompt_chars || 0} знаков промпта${summaryText}`;
   el.batchStatus.textContent = batch.json_saved ? "JSON сохранён" : "нет JSON";
   if (batch.provider_limit_exceeded) {
     el.batchStatus.textContent = "выше лимита";

@@ -15,9 +15,15 @@ Companies in this batch:
 Requested metrics:
 {{METRIC_LIST}}
 
+Source priority:
+- Use StockAnalysis attachments first for standardized income statement, balance sheet, cash-flow, and employee-count rows when they are available for the target period.
+- Use company/regulatory sources only when StockAnalysis is unavailable, lacks the required target period, or lacks the requested metric.
+- Do not prefer official sources merely because they look more authoritative if StockAnalysis already provides the same metric for the same target period.
+- Do not combine multiple sources for the same metric unless the primary StockAnalysis source is missing that metric; explain every fallback in `evidence_quote` or `company_review_notes`.
+
 Rules:
 1. {{PERIOD_RULE_1}}
-2. Prefer official company/regulatory sources over aggregator fallbacks.
+2. Follow the source priority above; do not mix consolidated group data with tire/tyre segment data silently.
 3. {{PERIOD_RULE_2}}
 4. Use each company's reporting currency. Do not convert between currencies.
 5. Normalize all monetary values to millions. If the source reports billions, multiply by 1000 and state this in `evidence_quote` or `review_reason`.

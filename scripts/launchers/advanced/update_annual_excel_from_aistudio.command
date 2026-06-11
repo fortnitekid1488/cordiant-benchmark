@@ -1,6 +1,6 @@
 #!/bin/zsh
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/../../.."
 source scripts/unix_python.sh
 "$PYTHON_EXE" scripts/apply_aistudio_json.py --mode annual
 echo ""

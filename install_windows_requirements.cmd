@@ -27,7 +27,7 @@ if errorlevel 1 goto error
 if errorlevel 1 goto error
 
 echo.
-echo Installed. Use start_dashboard.cmd or the prepare/update .cmd launchers.
+echo Installed. Use start_dashboard.cmd to open the dashboard, or update_from_github.cmd to update this folder later.
 pause
 exit /b 0
 
